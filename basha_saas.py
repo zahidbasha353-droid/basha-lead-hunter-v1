@@ -52,7 +52,7 @@ if "db_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V18", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V19", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def image_to_base64(uploaded_file):
@@ -121,7 +121,7 @@ if role == "owner":
 
 col_head1, col_head2 = st.columns([4, 1])
 with col_head1:
-    st.title("🦁 Basha Master V18")
+    st.title("🦁 Basha Master V19")
 with col_head2:
     st.metric(label="💰 Wallet Balance", value=display_balance)
 
@@ -167,27 +167,41 @@ if role == "owner":
     st.title("🛠️ Admin Empire")
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔔 Payments", "⚙️ Settings", "➕ Add User", "👥 Manage Users", "📊 Reports"])
     
-    # TAB 1: PAYMENTS
+    # TAB 1: PAYMENTS (APPROVE / DECLINE)
     with tab1:
         st.subheader("🔔 Pending Requests")
         pending = [r for r in db["payment_requests"] if r["status"] == "Pending"]
+        
         if pending:
             for i, req in enumerate(pending):
                 with st.container(border=True):
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.write(f"👤 {req['user']}")
+                    c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
+                    c1.write(f"👤 **{req['user']}**")
                     c2.write(f"💰 ₹{req['amount']}")
-                    c3.write(f"🆔 {req['utr']}")
-                    if c4.button("✅ Approve", key=f"app_{i}"):
+                    c3.write(f"🆔 `{req['utr']}`")
+                    
+                    # APPROVE BUTTON
+                    if c4.button("✅", key=f"app_{i}", help="Approve Payment"):
                         fresh = load_data()
                         fresh["users"][req['user']]["credits"] += req['amount']
+                        # Mark Approved
                         for item in fresh["payment_requests"]:
                             if item["utr"] == req["utr"]: item["status"] = "Approved"
                         save_data(fresh)
-                        st.success("Approved!")
+                        st.success(f"Approved ₹{req['amount']} for {req['user']}")
                         time.sleep(1)
                         st.rerun()
-        else: st.info("No requests.")
+                    
+                    # DECLINE BUTTON
+                    if c5.button("❌", key=f"dec_{i}", help="Decline Payment"):
+                        fresh = load_data()
+                        # Remove from list (Decline)
+                        fresh["payment_requests"] = [r for r in fresh["payment_requests"] if r["utr"] != req["utr"]]
+                        save_data(fresh)
+                        st.warning(f"Declined request from {req['user']}")
+                        time.sleep(1)
+                        st.rerun()
+        else: st.info("No pending requests.")
 
     # TAB 2: SETTINGS
     with tab2:
@@ -224,11 +238,10 @@ if role == "owner":
                         wa = make_login_share_link(mph, mu, mp)
                         st.markdown(f'<a href="{wa}" target="_blank"><button>📲 Send WhatsApp</button></a>', unsafe_allow_html=True)
 
-    # TAB 4: MANAGE USERS (PASSWORD + DELETE)
+    # TAB 4: MANAGE USERS
     with tab4:
         st.subheader("👥 Active Users List")
         fresh = load_data()
-        # Added Password Column & Delete Column
         users_list = [
             {
                 "User": u, 
@@ -245,7 +258,7 @@ if role == "owner":
             pd.DataFrame(users_list), 
             column_config={
                 "Delete": st.column_config.CheckboxColumn("Remove?", default=False),
-                "Password": st.column_config.TextColumn("Password") # Show Password
+                "Password": st.column_config.TextColumn("Password")
             }, 
             disabled=["User", "Role", "Balance"], 
             hide_index=True
@@ -266,7 +279,7 @@ if role == "owner":
     with tab5:
         if db["logs"]: st.dataframe(pd.DataFrame(db["logs"]))
 
-# --- 🕵️‍♂️ SCRAPER V18 (OWNER UNLIMITED) ---
+# --- 🕵️‍♂️ SCRAPER V19 (SAFE & VERIFIED) ---
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
@@ -274,18 +287,16 @@ if date.today() > exp_date and role != "owner":
     st.error("⛔ PLAN EXPIRED!")
     st.stop()
 
-# Logic: Only check limits if NOT owner
 if role != "owner":
     remaining_daily = user_data.get('daily_cap', 300) - user_data.get('today_usage', 0)
     if remaining_daily <= 0: st.error("⛔ Daily Limit Reached!"); st.stop()
     if user_data.get('credits', 0) < LEAD_COST: st.error(f"⛔ Low Balance! Min: ₹{LEAD_COST}"); st.stop()
 else:
-    remaining_daily = 999999 # Infinite for owner display
+    remaining_daily = 999999
 
 c1, c2, c3 = st.columns([2, 1, 1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
 
-# Slider Logic
 current_bal = user_data.get('credits', 0)
 max_by_money = int(current_bal / LEAD_COST)
 max_allowed = min(max_by_money, remaining_daily) if role != "owner" else 10000
@@ -302,7 +313,9 @@ if role != "owner":
 
 if st.button("🚀 Start Vettai"):
     fresh = load_data()
-    # Double Check for Clients
+    # Verify Global Lead DB integrity before starting
+    if "leads" not in fresh: fresh["leads"] = []
+    
     if role != "owner":
         if fresh["users"][current_user]["credits"] < LEAD_COST: st.error("Low Balance!"); st.stop()
         if fresh["users"][current_user]["today_usage"] >= fresh["users"][current_user]["daily_cap"]: st.error("Limit Reached!"); st.stop()
@@ -336,6 +349,7 @@ if st.button("🚀 Start Vettai"):
                     try: rating = float(re.search(r"(\d\.\d)", elem.find_element(By.XPATH, "./..").text).group(1))
                     except: pass
                     l = elem.get_attribute("href")
+                    # 🛡️ CRITICAL: Check if Lead exists in Global DB
                     if rating >= min_rating and l not in db["leads"]: links.add(l)
                 except: pass
             scrolls += 1
@@ -345,8 +359,8 @@ if st.button("🚀 Start Vettai"):
         progress = st.progress(0)
         
         for i, link in enumerate(ulinks):
+            # 🛡️ CRITICAL: Reload DB to check if another user took this lead just now
             fresh = load_data()
-            # Client Check Loop
             if role != "owner":
                 if fresh["users"][current_user]["credits"] < LEAD_COST: status.error("Balance Over!"); break
                 if fresh["users"][current_user]["today_usage"] >= fresh["users"][current_user]["daily_cap"]: status.error("Daily Limit!"); break
@@ -361,6 +375,9 @@ if st.button("🚀 Start Vettai"):
                     btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
                     if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
+                
+                # 🛡️ CRITICAL: Double check Global DB for Phone & Link
+                if link in fresh["leads"]: continue
                 if phone != "No Number" and phone in fresh["leads"]: continue
                 
                 email, website = "Skipped", "Not Found"
@@ -377,17 +394,17 @@ if st.button("🚀 Start Vettai"):
                     except: pass
                 
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
+                
+                # 🛡️ LOCK THE LEAD IMMEDIATELY
                 fresh["leads"].append(link)
                 if phone != "No Number": fresh["leads"].append(phone)
                 
-                # COST DEDUCTION (Only for Clients)
                 if role != "owner":
                     fresh["users"][current_user]["credits"] -= LEAD_COST
                     fresh["users"][current_user]["today_usage"] += 1
                 
                 save_data(fresh)
                 
-                # Balance Display
                 bal_disp = "∞" if role == "owner" else f"₹{fresh['users'][current_user]['credits']}"
                 status.success(f"✅ Secured: {name} | 💰 Bal: {bal_disp}")
                 progress.progress((i+1)/len(ulinks))
