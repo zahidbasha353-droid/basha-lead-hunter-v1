@@ -30,7 +30,7 @@ if "global_leads_db" not in st.session_state:
 if "activity_log" not in st.session_state:
     st.session_state["activity_log"] = []
 
-st.set_page_config(page_title="Basha Master V8", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V9", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def generate_coupon(days, limit):
@@ -45,6 +45,13 @@ def make_whatsapp_link(phone):
     if len(clean_num) == 10: clean_num = "91" + clean_num
     return f"https://wa.me/{clean_num}?text=Hi,%20saw%20your%20business%20on%20Google!"
 
+def make_login_share_link(phone, user, pwd):
+    # Creates a WhatsApp message with login details
+    clean_num = re.sub(r'\D', '', phone)
+    if len(clean_num) == 10: clean_num = "91" + clean_num
+    msg = f"🦁 *Welcome to Basha Empire!* 🦁%0A%0AHere are your Login Details:%0A👤 *Username:* {user}%0A🔑 *Password:* {pwd}%0A%0ALogin here: [Your_App_Link]"
+    return f"https://wa.me/{clean_num}?text={msg}"
+
 # --- 🔐 LOGIN SYSTEM ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -54,7 +61,7 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     st.markdown("## 🔐 Basha Master Access")
     
-    tab_login, tab_redeem = st.tabs(["🔑 Login", "🎟️ New User Register"])
+    tab_login, tab_redeem = st.tabs(["🔑 Login", "🎟️ Redeem Code (New User)"])
     
     with tab_login:
         u = st.text_input("Username")
@@ -62,7 +69,6 @@ if not st.session_state["logged_in"]:
         if st.button("Login"):
             db = st.session_state["user_db"]
             if u in db and db[u]["password"] == p:
-                # Expired users can login but limited access logic can be added
                 st.session_state["logged_in"] = True
                 st.session_state["user"] = u
                 st.session_state["role"] = db[u]["role"]
@@ -70,10 +76,10 @@ if not st.session_state["logged_in"]:
             else: st.error("❌ Wrong ID/Password")
 
     with tab_redeem:
-        st.info("Use this to create a NEW account.")
+        st.caption("Use this ONLY if you have a Coupon Code.")
         new_u = st.text_input("Choose Username")
         new_p = st.text_input("Choose Password", type="password")
-        coupon = st.text_input("Enter Coupon Code (e.g., BAS8291)")
+        coupon = st.text_input("Enter Coupon Code")
         
         if st.button("🚀 Redeem & Register"):
             if coupon in st.session_state["redeem_codes"]:
@@ -86,69 +92,56 @@ if not st.session_state["logged_in"]:
                         "password": new_p, "role": "client", "expiry": exp_date, "daily_limit": details['limit']
                     }
                     del st.session_state["redeem_codes"][coupon]
-                    st.success("✅ Account Created! Please Login.")
+                    st.success("✅ Account Created!")
             else: st.error("❌ Invalid Code!")
     st.stop()
 
-# --- 🖥️ DASHBOARD & RECHARGE SYSTEM ---
+# --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 role = st.session_state["role"]
-
 if current_user not in st.session_state["user_db"]:
     st.session_state["logged_in"] = False
     st.rerun()
-
 user_data = st.session_state["user_db"][current_user]
 
-# SIDEBAR INFO
+# Sidebar
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.badge(role.upper())
 st.sidebar.metric("⚡ Daily Limit", f"{user_data['daily_limit']}")
 st.sidebar.caption(f"📅 Valid till: {user_data['expiry']}")
 
-# --- 💎 RECHARGE SYSTEM (NEW) ---
 if role == "client":
-    with st.sidebar.expander("💎 Recharge / Top-up", expanded=True):
-        st.write("Enter coupon to increase limit/validity.")
+    with st.sidebar.expander("💎 Recharge / Top-up"):
         recharge_code = st.text_input("Enter Coupon Code")
-        
-        if st.button("Apply Recharge"):
+        if st.button("Apply"):
             if recharge_code in st.session_state["redeem_codes"]:
                 data = st.session_state["redeem_codes"][recharge_code]
-                
-                # Update User Data
-                new_limit = data['limit']
                 new_expiry = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
-                
-                st.session_state["user_db"][current_user]["daily_limit"] = new_limit
+                st.session_state["user_db"][current_user]["daily_limit"] = data['limit']
                 st.session_state["user_db"][current_user]["expiry"] = new_expiry
-                
-                # Burn Coupon
                 del st.session_state["redeem_codes"][recharge_code]
-                
-                st.success(f"✅ Upgraded! Limit: {new_limit}, Valid: {new_expiry}")
-                time.sleep(2)
+                st.success("✅ Recharge Successful!")
+                time.sleep(1)
                 st.rerun()
-            else:
-                st.error("❌ Invalid Code")
+            else: st.error("Invalid Code")
 
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
     st.rerun()
 
-# --- 👑 ADMIN EMPIRE ---
+# --- 👑 ADMIN EMPIRE (UPDATED) ---
 if role == "owner":
     st.title("🛠️ Admin Empire")
-    tab1, tab2, tab3 = st.tabs(["🗑️ Manage Users", "🎟️ Generate Codes", "📊 Reports"])
+    # 4 TABS NOW
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 Manage Users", "➕ Direct Add User", "🎟️ Generate Coupons", "📊 Reports"])
     
+    # TAB 1: LIST & DELETE
     with tab1:
-        st.subheader("Manage Users")
+        st.subheader("Active Users List")
         users_list = [{"Username": u, "Pass": d["password"], "Exp": d["expiry"], "Limit": d["daily_limit"], "Delete": False} 
                       for u, d in st.session_state["user_db"].items()]
-        
         edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False)}, 
                                    disabled=["Username"], hide_index=True, key="user_editor")
-        
         if st.button("🗑️ Delete Selected"):
             to_delete = edited_df[edited_df["Delete"] == True]["Username"].tolist()
             if "basha" in to_delete: st.error("❌ Can't delete Owner!")
@@ -158,36 +151,69 @@ if role == "owner":
                 time.sleep(1)
                 st.rerun()
 
+    # TAB 2: MANUAL ADD + GREETING (NEW FEATURE)
     with tab2:
-        st.subheader("🎟️ Create Recharge/Register Codes")
-        c1, c2 = st.columns(2)
-        days = c1.selectbox("Validity", [7, 15, 30, 365], format_func=lambda x: f"{x} Days")
-        limit = c2.number_input("Daily Limit", value=50)
-        if st.button("⚡ Generate Code"):
-            code = generate_coupon(days, limit)
-            st.success(f"🔥 Code: {code}")
-            st.code(code, language="text")
-            st.info("Share this for New Register OR Existing User Recharge.")
+        st.subheader("➕ Manually Create User (Friend/VIP)")
+        with st.form("manual_add"):
+            c1, c2 = st.columns(2)
+            mu = c1.text_input("New Username")
+            mp = c2.text_input("New Password")
+            c3, c4 = st.columns(2)
+            ml = c3.number_input("Daily Limit", 50)
+            md = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
             
-        if st.session_state["redeem_codes"]:
-            st.write("### Active Coupons:")
-            st.json(st.session_state["redeem_codes"])
+            # Phone Number for Greeting
+            m_phone = st.text_input("User Phone Number (for SMS/WhatsApp)", placeholder="9876543210")
+            
+            if st.form_submit_button("Create User"):
+                if mu in st.session_state["user_db"]:
+                    st.error("Username exists!")
+                else:
+                    exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
+                    st.session_state["user_db"][mu] = {"password": mp, "role": "client", "expiry": exp, "daily_limit": ml}
+                    st.success(f"✅ User '{mu}' Created Successfully!")
+                    
+                    # GENERATE WHATSAPP LINK IF PHONE PROVIDED
+                    if m_phone:
+                        wa_link = make_login_share_link(m_phone, mu, mp)
+                        st.markdown(f"""
+                        <a href="{wa_link}" target="_blank">
+                            <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; border-radius:5px; font-size:16px; cursor:pointer;">
+                                📲 Send Details via WhatsApp
+                            </button>
+                        </a>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.warning("Phone number not provided. Cannot send greeting msg.")
 
+    # TAB 3: COUPONS
     with tab3:
+        st.subheader("🎟️ Generate Codes (For Payment/Unknowns)")
+        c1, c2 = st.columns(2)
+        days = c1.selectbox("Validity", [7, 15, 30], key="g_days")
+        limit = c2.number_input("Limit", 50, key="g_limit")
+        if st.button("⚡ Generate"):
+            code = generate_coupon(days, limit)
+            st.success(f"Code: {code}")
+            st.code(code)
+        if st.session_state["redeem_codes"]: st.json(st.session_state["redeem_codes"])
+
+    # TAB 4: REPORTS
+    with tab4:
         if st.session_state["activity_log"]:
             df = pd.DataFrame(st.session_state["activity_log"])
             st.dataframe(df)
-            st.download_button("📥 Download Report", df.to_csv().encode('utf-8'), "report.csv")
+            st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
         else: st.info("No data.")
 
-# --- 🕵️‍♂️ SCRAPER ENGINE V8 ---
-st.header("🦁 Basha Master V8: The Beast")
+# --- 🕵️‍♂️ SCRAPER V9 ---
+st.header("🦁 Basha Master V9: The Beast")
 st.markdown("---")
 
-# Expired User Check
+# Expiry Check
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
 if date.today() > exp_date and role != "owner":
-    st.error("⛔ YOUR PLAN EXPIRED! Please buy a Recharge Code from Admin and enter it in Sidebar.")
+    st.error("⛔ PLAN EXPIRED! Recharge needed.")
     st.stop()
 
 c1, c2, c3 = st.columns([2, 1, 1])
