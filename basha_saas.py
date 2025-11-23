@@ -162,4 +162,189 @@ if role == "owner":
             c3, c4 = st.columns(2)
             # Replaced Daily Limit with Initial Credits
             ml = c3.number_input("Initial Credits (₹)", 100)
-            md = c4.selectbox("Validity", [30, 90, 365], format_func=
+            md = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
+            m_phone = st.text_input("Phone (Optional)")
+            
+            if st.form_submit_button("Create User"):
+                if mu in db["users"]: st.error("Exists!")
+                else:
+                    exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
+                    db["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "credits": ml}
+                    save_data(db)
+                    st.success(f"✅ User '{mu}' Created with ₹{ml}!")
+                    if m_phone:
+                        wa_link = make_login_share_link(m_phone, mu, mp)
+                        st.markdown(f'<a href="{wa_link}" target="_blank"><button>📲 Send Login</button></a>', unsafe_allow_html=True)
+
+    with tab2:
+        st.subheader("🎟️ Generate Money Codes")
+        c1, c2 = st.columns(2)
+        days = c1.selectbox("Validity Extension", [0, 15, 30], key="g_days")
+        amount = c2.number_input("Amount (₹)", 100, step=50, key="g_amt")
+        if st.button("⚡ Generate"):
+            code = generate_coupon(days, amount)
+            st.success(f"Code: {code}")
+            st.code(code)
+            st.info(f"Value: ₹{amount}")
+        if db["coupons"]: st.json(db["coupons"])
+
+    with tab3:
+        st.subheader("Active Users")
+        # Display Credits instead of Limit
+        users_list = [{"User": u, "Pass": d["password"], "Exp": d["expiry"], "Balance": f"₹{d.get('credits',0)}", "Delete": False} 
+                      for u, d in db["users"].items()]
+        edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False)}, hide_index=True)
+        if st.button("🗑️ Delete Selected"):
+            to_delete = edited_df[edited_df["Delete"] == True]["User"].tolist()
+            if "basha" in to_delete: st.error("Cannot delete Owner!")
+            elif to_delete:
+                for u in to_delete: del db["users"][u]
+                save_data(db)
+                st.rerun()
+
+    with tab4:
+        if db["logs"]:
+            df = pd.DataFrame(db["logs"])
+            st.dataframe(df)
+            st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
+        else: st.info("No data.")
+
+# --- 🕵️‍♂️ SCRAPER V14 (BUSINESS LOGIC) ---
+st.markdown("---")
+
+# 1. Check Expiry
+exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
+if date.today() > exp_date and role != "owner":
+    st.error("⛔ PLAN EXPIRED! Please Recharge.")
+    st.stop()
+
+# 2. Check Balance
+current_balance = user_data.get('credits', 0)
+if current_balance < LEAD_COST and role != "owner":
+    st.error(f"⛔ Low Balance! You need at least ₹{LEAD_COST} to hunt.")
+    st.stop()
+
+# UI Inputs
+c1, c2, c3 = st.columns([2, 1, 1])
+keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
+
+# Max leads possible with current balance
+max_leads_possible = int(current_balance / LEAD_COST) if role != "owner" else 1000
+slider_default = 5 if max_leads_possible >= 5 else 1
+
+leads_requested = c2.slider("Leads Needed", 1, max_leads_possible, slider_default)
+estimated_cost = leads_requested * LEAD_COST
+
+min_rating = c3.slider("⭐ Min Rating", 0.0, 5.0, 3.5, 0.5)
+enable_email = st.checkbox("📧 Enable Email Extraction")
+
+# Cost Warning
+if role != "owner":
+    st.info(f"💰 Estimated Cost: ₹{estimated_cost} (Current Balance: ₹{current_balance})")
+
+if st.button("🚀 Start Vettai"):
+    # Double Check Balance
+    if db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
+        st.error("❌ Insufficient Funds!")
+        st.stop()
+
+    status = st.empty()
+    status.info("🌐 Booting Cloud Browser...")
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()), options=options)
+    
+    collected_data = []
+    try:
+        driver.get("https://www.google.com/maps")
+        time.sleep(3)
+        driver.find_element(By.ID, "searchboxinput").send_keys(keyword + Keys.RETURN)
+        time.sleep(5)
+        status.warning("🔍 Scanning...")
+        
+        links_to_visit = set()
+        scrolls = 0
+        panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
+        while len(links_to_visit) < leads_requested and scrolls < 20:
+            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", panel)
+            time.sleep(2)
+            elements = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+            for elem in elements:
+                try:
+                    rating = 0.0
+                    try: rating = float(re.search(r"(\d\.\d)", elem.find_element(By.XPATH, "./..").text).group(1))
+                    except: pass
+                    l = elem.get_attribute("href")
+                    if rating >= min_rating and l not in db["leads"]: links_to_visit.add(l)
+                except: pass
+            scrolls += 1
+        
+        status.info(f"✅ Found {len(links_to_visit)} Targets. Extracting...")
+        unique_links = list(links_to_visit)[:leads_requested]
+        progress = st.progress(0)
+        
+        # --- EXTRACTION LOOP ---
+        for i, link in enumerate(unique_links):
+            # LIVE BALANCE CHECK
+            if db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
+                status.error("❌ Balance Over! Stopping...")
+                break
+
+            try:
+                driver.get(link)
+                time.sleep(2)
+                try: name = driver.find_element(By.XPATH, '//h1[contains(@class, "DUwDvf")]').text
+                except: name = "Unknown"
+                phone = "No Number"
+                try:
+                    btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
+                    if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
+                except: pass
+                
+                if phone != "No Number" and phone in db["leads"]: continue
+                
+                email, website = "Skipped", "Not Found"
+                if enable_email:
+                    try:
+                        w_btns = driver.find_elements(By.XPATH, '//a[contains(@data-item-id, "authority")]')
+                        if w_btns:
+                            website = w_btns[0].get_attribute("href")
+                            try:
+                                r = requests.get(website, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                                mails = set(re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", r.text, re.I))
+                                if mails: email = list(mails)[0]
+                            except: pass
+                    except: pass
+                
+                collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
+                
+                # UPDATE DB (Cost Deduction)
+                db["leads"].append(link)
+                if phone != "No Number": db["leads"].append(phone)
+                
+                if role != "owner":
+                    db["users"][current_user]["credits"] -= LEAD_COST
+                
+                save_data(db) # Save after every lead to be safe
+                
+                status.success(f"✅ Secured: {name} | 💰 Bal: ₹{db['users'][current_user]['credits']}")
+                progress.progress((i+1)/len(unique_links))
+            except: continue
+            
+        if collected_data:
+            total_cost = len(collected_data) * LEAD_COST
+            msg = f"Completed! Total Spent: ₹{total_cost}" if role != "owner" else "Completed!"
+            db["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
+            save_data(db)
+            
+            df = pd.DataFrame(collected_data)
+            st.data_editor(df, column_config={"WhatsApp": st.column_config.LinkColumn("Chat", display_text="📲 Chat"), "Website": st.column_config.LinkColumn("Site")}, hide_index=True)
+            st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8'), "leads.csv", "text/csv")
+            st.success(msg)
+            time.sleep(2)
+            st.rerun() # Refresh to update top right balance
+        else: st.warning("No leads found.")
+    except Exception as e: st.error(f"Error: {e}")
+    finally: driver.quit()
