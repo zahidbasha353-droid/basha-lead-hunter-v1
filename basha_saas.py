@@ -7,6 +7,7 @@ import random
 import string
 import json
 import os
+import base64
 from datetime import datetime, timedelta, date
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -25,33 +26,22 @@ def load_data():
         try:
             with open(DB_FILE, "r") as f:
                 data = json.load(f)
-                # --- MIGRATION: ADD MISSING FIELDS FOR OLD USERS ---
-                today_str = str(date.today())
-                for u in data["users"]:
-                    # Ensure Credits exist
-                    if "credits" not in data["users"][u]:
-                        data["users"][u]["credits"] = 0
-                    # Ensure Daily Limit fields exist
-                    if "daily_cap" not in data["users"][u]:
-                        data["users"][u]["daily_cap"] = 500 # Default limit for old users
-                    if "today_usage" not in data["users"][u]:
-                        data["users"][u]["today_usage"] = 0
-                    if "last_active_date" not in data["users"][u]:
-                        data["users"][u]["last_active_date"] = today_str
+                # Ensure new fields exist
+                if "payment_requests" not in data: data["payment_requests"] = []
+                if "settings" not in data: data["settings"] = {"upi_id": "basha@upi", "qr_image": None}
                 return data
         except: pass
     
-    # FRESH START DEFAULT DATA
     return {
         "users": {
             "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "credits": 50000, "daily_cap": 10000, "today_usage": 0, "last_active_date": str(date.today())},
             "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "credits": 50, "daily_cap": 300, "today_usage": 0, "last_active_date": str(date.today())}
         },
-        "coupons": {
-            "BASHA100": {"days": 365, "amount": 1000}
-        },
+        "coupons": {},
         "leads": [],
-        "logs": []
+        "logs": [],
+        "payment_requests": [],
+        "settings": {"upi_id": "yourname@upi", "qr_image": None}
     }
 
 def save_data(data):
@@ -64,18 +54,13 @@ if "db_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V16", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V17", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
-def generate_coupon(days, amount):
-    suffix = ''.join(random.choices(string.digits, k=4))
-    code = f"BAS{suffix}"
-    # Load fresh to avoid overwrite
-    current_db = load_data()
-    current_db["coupons"][code] = {"days": days, "amount": amount}
-    save_data(current_db)
-    st.session_state["db_data"] = current_db
-    return code
+def image_to_base64(uploaded_file):
+    try:
+        return base64.b64encode(uploaded_file.getvalue()).decode()
+    except: return None
 
 def make_whatsapp_link(phone):
     if not phone or phone == "No Number": return None
@@ -112,11 +97,10 @@ if not st.session_state["logged_in"]:
             else: st.error("❌ Incorrect Username or Password")
     st.stop()
 
-# --- 🖥️ DASHBOARD & DAILY CHECK ---
+# --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 role = st.session_state["role"]
 
-# RELOAD DB & CHECK DAILY RESET
 db = load_data()
 st.session_state["db_data"] = db
 
@@ -126,18 +110,18 @@ if current_user not in db["users"]:
 
 user_data = db["users"][current_user]
 
-# Logic: If date changed, reset today_usage to 0
+# Daily Reset Logic
 today_str = str(date.today())
 if user_data.get("last_active_date") != today_str:
     db["users"][current_user]["today_usage"] = 0
     db["users"][current_user]["last_active_date"] = today_str
     save_data(db)
-    user_data = db["users"][current_user] # Refresh variable
+    user_data = db["users"][current_user]
 
 # --- TOP BAR ---
 col_head1, col_head2 = st.columns([4, 1])
 with col_head1:
-    st.title("🦁 Basha Master V16")
+    st.title("🦁 Basha Master V17")
 with col_head2:
     st.metric(label="💰 Wallet Balance", value=f"₹{user_data.get('credits', 0)}")
 
@@ -145,7 +129,7 @@ with col_head2:
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.caption(f"📅 Plan Exp: {user_data['expiry']}")
 
-# Show Daily Limit Progress
+# Daily Limit Progress
 daily_cap = user_data.get('daily_cap', 300)
 today_used = user_data.get('today_usage', 0)
 remaining_daily = daily_cap - today_used
@@ -156,29 +140,40 @@ st.sidebar.write(f"📊 **Daily Quota:** {today_used}/{daily_cap}")
 st.sidebar.progress(min(today_used / daily_cap, 1.0))
 st.sidebar.markdown("---")
 
-# --- RECHARGE ---
+# --- 💎 SIDEBAR RECHARGE (NEW REQUEST SYSTEM) ---
 if role == "client":
-    with st.sidebar.expander("💎 Wallet / Recharge"):
+    with st.sidebar.expander("💎 Recharge Wallet", expanded=True):
         st.write("Scan to Pay:")
-        st.image("https://upload.wikimedia.org/wikipedia/commons/d/d0/QR_code_for_mobile_English_Wikipedia.svg", caption="UPI: basha@okicici")
-        recharge_code = st.text_input("Enter Coupon Code")
-        if st.button("✅ Add Money"):
-            fresh_db = load_data()
-            if recharge_code in fresh_db["coupons"]:
-                data = fresh_db["coupons"][recharge_code]
-                add_amount = data.get('amount', 0)
-                if add_amount == 0 and 'limit' in data: add_amount = data['limit']
-                
-                fresh_db["users"][current_user]["credits"] += add_amount
-                fresh_db["users"][current_user]["expiry"] = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
-                
-                if recharge_code != "BASHA100": del fresh_db["coupons"][recharge_code]
-                save_data(fresh_db)
-                st.session_state["db_data"] = fresh_db
-                st.success(f"🎉 Added ₹{add_amount}")
-                time.sleep(2)
-                st.rerun()
-            else: st.error("❌ Invalid Code")
+        
+        # DISPLAY DYNAMIC QR & UPI
+        settings = db.get("settings", {})
+        if settings.get("qr_image"):
+            st.image(base64.b64decode(settings["qr_image"]), caption="Scan this QR")
+        else:
+            st.warning("Admin hasn't uploaded QR yet.")
+            
+        st.code(settings.get("upi_id", "basha@upi"), language="text")
+        st.markdown("---")
+        
+        # Payment Request Form
+        st.write("**Step 2: Submit Details**")
+        pay_amt = st.number_input("Amount Paid (₹)", min_value=100, step=50)
+        pay_utr = st.text_input("Transaction ID / UTR")
+        
+        if st.button("🔔 Notify Admin"):
+            if pay_utr:
+                req = {
+                    "user": current_user,
+                    "amount": pay_amt,
+                    "utr": pay_utr,
+                    "time": str(datetime.now().strftime("%Y-%m-%d %H:%M")),
+                    "status": "Pending"
+                }
+                db["payment_requests"].append(req)
+                save_data(db)
+                st.success("✅ Request Sent! Wait for approval.")
+            else:
+                st.error("Enter Transaction ID")
 
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
@@ -187,23 +182,67 @@ if st.sidebar.button("Logout", type="primary"):
 # --- 👑 ADMIN EMPIRE ---
 if role == "owner":
     st.title("🛠️ Admin Empire")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Add User", "🎟️ Money Coupons", "👥 Users", "📊 Reports"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔔 Payment Requests", "⚙️ QR Settings", "➕ Add User", "👥 Users", "📊 Reports"])
     
+    # TAB 1: PAYMENT APPROVALS (NEW)
     with tab1:
+        st.subheader("🔔 Pending Payment Requests")
+        
+        # Filter Pending
+        pending_reqs = [r for r in db["payment_requests"] if r["status"] == "Pending"]
+        
+        if pending_reqs:
+            for i, req in enumerate(pending_reqs):
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.write(f"👤 **{req['user']}**")
+                    c2.write(f"💰 **₹{req['amount']}**")
+                    c3.write(f"🆔 `{req['utr']}`")
+                    
+                    if c4.button(f"✅ Approve", key=f"app_{i}"):
+                        # Add Money
+                        fresh_db = load_data() # Load latest to avoid overwrite
+                        fresh_db["users"][req['user']]["credits"] += req['amount']
+                        
+                        # Remove from pending (mark approved)
+                        # We need to find exact index in main DB list
+                        for item in fresh_db["payment_requests"]:
+                            if item["utr"] == req["utr"]:
+                                item["status"] = "Approved"
+                        
+                        save_data(fresh_db)
+                        st.success(f"Approved! ₹{req['amount']} added to {req['user']}")
+                        time.sleep(1)
+                        st.rerun()
+        else:
+            st.info("No pending requests.")
+
+    # TAB 2: QR SETTINGS (NEW)
+    with tab2:
+        st.subheader("⚙️ Setup Payment Details")
+        current_upi = db["settings"].get("upi_id", "")
+        new_upi = st.text_input("Your UPI ID", value=current_upi)
+        
+        uploaded_qr = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
+        
+        if st.button("💾 Save Settings"):
+            db["settings"]["upi_id"] = new_upi
+            if uploaded_qr:
+                db["settings"]["qr_image"] = image_to_base64(uploaded_qr)
+            save_data(db)
+            st.success("Settings Saved!")
+
+    # TAB 3: ADD USER
+    with tab3:
         st.subheader("➕ Create New User")
         with st.form("manual_add"):
             c1, c2 = st.columns(2)
             mu = c1.text_input("Username")
             mp = c2.text_input("Password")
-            
             c3, c4 = st.columns(2)
-            # THIS IS THE WALLET BALANCE
-            initial_credits = c3.number_input("Initial Wallet Balance (₹)", 100)
-            validity_days = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
-            
-            # THIS IS THE DAILY LIMIT
-            daily_limit_input = st.number_input("🔒 Daily Lead Limit (Safety Cap)", value=300, help="User cannot exceed this many leads per day, even if they have money.")
-            
+            ml = c3.number_input("Initial Credits (₹)", 100)
+            md = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
+            daily_limit_input = st.number_input("🔒 Daily Lead Limit", value=300)
             m_phone = st.text_input("Phone (Optional)")
             
             if st.form_submit_button("Create User"):
@@ -211,104 +250,60 @@ if role == "owner":
                 if mu in fresh_db["users"]: st.error("Exists!")
                 else:
                     exp = (date.today() + timedelta(days=validity_days)).strftime("%Y-%m-%d")
-                    # Save Daily Cap
                     fresh_db["users"][mu] = {
-                        "password": mp, 
-                        "role": "client", 
-                        "expiry": exp, 
-                        "credits": initial_credits,
-                        "daily_cap": daily_limit_input,
-                        "today_usage": 0,
-                        "last_active_date": str(date.today())
+                        "password": mp, "role": "client", "expiry": exp, 
+                        "credits": ml, "daily_cap": daily_limit_input, "today_usage": 0, "last_active_date": str(date.today())
                     }
                     save_data(fresh_db)
-                    st.success(f"✅ User '{mu}' Created! (Limit: {daily_limit_input}/day)")
+                    st.success(f"✅ User '{mu}' Created!")
                     if m_phone:
                         wa_link = make_login_share_link(m_phone, mu, mp)
                         st.markdown(f'<a href="{wa_link}" target="_blank"><button>📲 Send Login</button></a>', unsafe_allow_html=True)
 
-    with tab2:
-        st.subheader("🎟️ Generate Money Codes")
-        c1, c2 = st.columns(2)
-        days = c1.selectbox("Validity Extension", [0, 15, 30], key="g_days")
-        amount = c2.number_input("Amount (₹)", 100, step=50, key="g_amt")
-        if st.button("⚡ Generate"):
-            code = generate_coupon(days, amount)
-            st.success(f"Code: {code} (Value: ₹{amount})")
-            st.code(code)
-        fresh_db = load_data()
-        if fresh_db["coupons"]: st.json(fresh_db["coupons"])
-
-    with tab3:
-        st.subheader("Active Users")
-        fresh_db = load_data()
-        users_list = [{"User": u, "Pass": d["password"], "Balance": f"₹{d.get('credits',0)}", "Daily Cap": d.get('daily_cap', 300), "Delete": False} 
-                      for u, d in fresh_db["users"].items()]
-        edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False)}, hide_index=True)
-        if st.button("🗑️ Delete Selected"):
-            to_delete = edited_df[edited_df["Delete"] == True]["User"].tolist()
-            if "basha" in to_delete: st.error("Cannot delete Owner!")
-            elif to_delete:
-                for u in to_delete: del fresh_db["users"][u]
-                save_data(fresh_db)
-                st.success("Deleted!")
-                time.sleep(1)
-                st.rerun()
-
     with tab4:
-        if db["logs"]:
-            df = pd.DataFrame(db["logs"])
-            st.dataframe(df)
-            st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
-        else: st.info("No data.")
+        st.subheader("Active Users")
+        users_list = [{"User": u, "Balance": f"₹{d.get('credits',0)}", "Daily Cap": d.get('daily_cap', 300)} for u, d in db["users"].items()]
+        st.dataframe(pd.DataFrame(users_list))
 
-# --- 🕵️‍♂️ SCRAPER V16 (LIMIT CHECKER) ---
+    with tab5:
+        if db["logs"]:
+            st.dataframe(pd.DataFrame(db["logs"]))
+
+# --- 🕵️‍♂️ SCRAPER V17 ---
 st.markdown("---")
 
-# 1. Expiry Check
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
 if date.today() > exp_date and role != "owner":
-    st.error("⛔ PLAN EXPIRED! Please Recharge.")
+    st.error("⛔ PLAN EXPIRED!")
     st.stop()
 
-# 2. Daily Limit Check
 if remaining_daily <= 0 and role != "owner":
-    st.error("⛔ Daily Quota Reached! Please come back tomorrow.")
+    st.error("⛔ Daily Limit Reached!")
     st.stop()
 
-# 3. Balance Check
 current_balance = user_data.get('credits', 0)
 if current_balance < LEAD_COST and role != "owner":
-    st.error(f"⛔ Low Balance! Min required: ₹{LEAD_COST}")
+    st.error(f"⛔ Low Balance! Min: ₹{LEAD_COST}")
     st.stop()
 
-# UI Inputs
 c1, c2, c3 = st.columns([2, 1, 1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
-
-# CALCULATE MAX SLIDER VALUE (Min of Balance AND Daily Limit)
 max_by_money = int(current_balance / LEAD_COST)
 max_allowed = min(max_by_money, remaining_daily) if role != "owner" else 1000
-
 slider_default = 5 if max_allowed >= 5 else 1
 if max_allowed == 0: slider_default = 0
-
 leads_requested = c2.slider("Leads Needed", 0, max_allowed, slider_default)
 estimated_cost = leads_requested * LEAD_COST
 min_rating = c3.slider("⭐ Min Rating", 0.0, 5.0, 3.5, 0.5)
 enable_email = st.checkbox("📧 Enable Email Extraction")
 
 if role != "owner":
-    st.info(f"💰 Cost: ₹{estimated_cost} | 📊 Daily Limit Remaining: {remaining_daily}")
+    st.info(f"💰 Cost: ₹{estimated_cost} | 📊 Daily Limit: {remaining_daily}")
 
 if st.button("🚀 Start Vettai"):
     fresh_db = load_data()
-    # Double Check ALL conditions before running
     if fresh_db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
         st.error("❌ Insufficient Funds!")
-        st.stop()
-    if fresh_db["users"][current_user]["today_usage"] >= fresh_db["users"][current_user]["daily_cap"] and role != "owner":
-        st.error("❌ Daily Limit Exceeded!")
         st.stop()
 
     status = st.empty()
@@ -349,14 +344,13 @@ if st.button("🚀 Start Vettai"):
         progress = st.progress(0)
         
         for i, link in enumerate(unique_links):
-            # LIVE CHECKS (Balance & Limit)
             fresh_db = load_data()
             if role != "owner":
                 if fresh_db["users"][current_user]["credits"] < LEAD_COST:
                     status.error("❌ Balance Over!")
                     break
                 if fresh_db["users"][current_user]["today_usage"] >= fresh_db["users"][current_user]["daily_cap"]:
-                    status.error("❌ Daily Limit Reached!")
+                    status.error("❌ Limit Reached!")
                     break
 
             try:
@@ -387,7 +381,6 @@ if st.button("🚀 Start Vettai"):
                 
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
                 
-                # UPDATE DB (Credits & Limit Count)
                 fresh_db["leads"].append(link)
                 if phone != "No Number": fresh_db["leads"].append(phone)
                 
@@ -396,7 +389,6 @@ if st.button("🚀 Start Vettai"):
                     fresh_db["users"][current_user]["today_usage"] += 1
                 
                 save_data(fresh_db)
-                
                 status.success(f"✅ Secured: {name} | 💰 Bal: ₹{fresh_db['users'][current_user]['credits']}")
                 progress.progress((i+1)/len(unique_links))
             except: continue
@@ -405,7 +397,6 @@ if st.button("🚀 Start Vettai"):
             total_cost = len(collected_data) * LEAD_COST
             fresh_db["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
             save_data(fresh_db)
-            
             df = pd.DataFrame(collected_data)
             st.data_editor(df, column_config={"WhatsApp": st.column_config.LinkColumn("Chat", display_text="📲 Chat"), "Website": st.column_config.LinkColumn("Site")}, hide_index=True)
             st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8'), "leads.csv", "text/csv")
