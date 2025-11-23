@@ -1,7 +1,7 @@
 import streamlit as st
 import time
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, timedelta, date
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -9,19 +9,27 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
-# --- 🔐 USER DATABASE (Session State) ---
-# Default Users (App restart aana idhu mattum than irukum)
-DEFAULT_USERS = {
-    "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "daily_limit": 10000},
-    "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
-}
+# --- 🧠 CENTRAL MEMORY (Simulated Database) ---
+# Note: Free Cloud la restart aana idhu reset aagum. 
+# Permanent ah venum na Google Sheets connect pannanum (Next Level).
 
 if "user_db" not in st.session_state:
-    st.session_state["user_db"] = DEFAULT_USERS
+    st.session_state["user_db"] = {
+        "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "daily_limit": 10000},
+        "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
+    }
 
-st.set_page_config(page_title="Basha Lead Hunter Pro", page_icon="🕵️‍♂️", layout="wide")
+# Used Numbers (Global Blacklist)
+if "global_leads_db" not in st.session_state:
+    st.session_state["global_leads_db"] = set() # Stores phone numbers that are already taken
 
-# --- LOGIN LOGIC ---
+# Activity Logs (Who did what)
+if "activity_log" not in st.session_state:
+    st.session_state["activity_log"] = []
+
+st.set_page_config(page_title="Basha Lead Hunter Pro", page_icon="📊", layout="wide")
+
+# --- 🔐 LOGIN SYSTEM ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["user"] = None
@@ -30,178 +38,197 @@ if "logged_in" not in st.session_state:
 def check_login(username, password):
     db = st.session_state["user_db"]
     if username in db and db[username]["password"] == password:
+        # Check Expiry
+        exp_date = datetime.strptime(db[username]["expiry"], "%Y-%m-%d").date()
+        if date.today() > exp_date:
+            return "expired", None
         return "success", db[username]["role"]
     return "fail", None
 
-# --- LOGIN SCREEN ---
+# Login UI
 if not st.session_state["logged_in"]:
     st.markdown("## 🔐 Basha Master Login")
-    user_input = st.text_input("Username")
-    pass_input = st.text_input("Password", type="password")
-    
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
     if st.button("Login"):
-        status, role = check_login(user_input, pass_input)
+        status, role = check_login(u, p)
         if status == "success":
             st.session_state["logged_in"] = True
-            st.session_state["user"] = user_input
+            st.session_state["user"] = u
             st.session_state["role"] = role
             st.rerun()
+        elif status == "expired":
+            st.error("❌ Your Plan Expired! Pay Basha Bhai to renew.")
         else:
-            st.error("❌ Wrong ID or Password")
+            st.error("❌ Wrong ID/Password")
     st.stop()
 
-# --- DASHBOARD SETUP ---
+# --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 current_role = st.session_state["role"]
-db = st.session_state["user_db"]
-user_limit = db[current_user]["daily_limit"]
+user_limit = st.session_state["user_db"][current_user]["daily_limit"]
 
 # Sidebar
 st.sidebar.title(f"👤 {current_user.capitalize()}")
-st.sidebar.badge(f"{current_role.upper()}")
+st.sidebar.badge(current_role.upper())
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
     st.rerun()
 
 # --- 👑 ADMIN PANEL (Only for Owner) ---
 if current_role == "owner":
-    with st.expander("🛠️ Admin Panel (Create New Users)", expanded=False):
-        c1, c2, c3, c4 = st.columns(4)
-        new_user = c1.text_input("New Username")
-        new_pass = c2.text_input("New Password")
-        new_limit = c3.number_input("Daily Limit", value=50)
-        add_btn = c4.button("➕ Add User")
-        
-        if add_btn and new_user and new_pass:
-            st.session_state["user_db"][new_user] = {
-                "password": new_pass,
-                "role": "client",
-                "expiry": "2025-12-30", # Default expiry
-                "daily_limit": new_limit
-            }
-            st.success(f"User '{new_user}' created!")
-            
-        st.write("### Active Users List:")
-        st.json(st.session_state["user_db"])
-
-# --- 🕵️‍♂️ MAIN SCRAPING TOOL ---
-st.title("🤖 Basha Master: Phone Number Hunter")
-st.markdown("---")
-
-col1, col2 = st.columns([2, 1])
-search_keyword = col1.text_input("Enter Business Type & City", "Gyms in Chennai")
-target = col2.slider("Leads Count", 5, user_limit, 5)
-
-# Stop Button Logic
-if "stop_scan" not in st.session_state:
-    st.session_state["stop_scan"] = False
-
-def stop_process():
-    st.session_state["stop_scan"] = True
-
-start_btn = st.button("🚀 Start Vettai")
-
-if start_btn:
-    st.session_state["stop_scan"] = False
-    status_box = st.empty()
-    data_box = st.empty()
-    stop_btn_placeholder = st.empty()
+    st.title("🛠️ Admin Control Center")
     
-    stop_btn_placeholder.button("🛑 STOP SCANNING", on_click=stop_process)
+    # Tabs for neat look
+    tab1, tab2 = st.tabs(["➕ Add User", "📊 Analytics & Logs"])
+    
+    with tab1:
+        with st.form("add_user_form"):
+            c1, c2 = st.columns(2)
+            new_user = c1.text_input("New Username")
+            new_pass = c2.text_input("New Password")
+            
+            c3, c4 = st.columns(2)
+            limit = c3.number_input("Daily Lead Limit", value=50)
+            duration = c4.selectbox("Plan Duration", ["15 Days", "30 Days", "3 Months", "1 Year"])
+            
+            if st.form_submit_button("Create User"):
+                days = 15
+                if duration == "30 Days": days = 30
+                elif duration == "3 Months": days = 90
+                elif duration == "1 Year": days = 365
+                
+                expiry_date = (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+                
+                st.session_state["user_db"][new_user] = {
+                    "password": new_pass,
+                    "role": "client",
+                    "expiry": expiry_date,
+                    "daily_limit": limit
+                }
+                st.success(f"✅ User '{new_user}' Created! Valid till {expiry_date}")
 
-    # Cloud Browser Setup
+    with tab2:
+        # Analytics Chart
+        st.subheader("📈 Search Trends (Category wise)")
+        if st.session_state["activity_log"]:
+            df_log = pd.DataFrame(st.session_state["activity_log"])
+            
+            # Bar Chart: Which category is most searched?
+            chart_data = df_log["keyword"].value_counts()
+            st.bar_chart(chart_data)
+            
+            # Detailed Table
+            st.write("### 📋 Recent User Activity")
+            st.dataframe(df_log, use_container_width=True)
+        else:
+            st.info("No activity yet.")
+            
+        st.write(f"🔥 **Total Global Leads Collected (Unique):** {len(st.session_state['global_leads_db'])}")
+
+    st.markdown("---")
+
+# --- 🕵️‍♂️ SCRAPING INTERFACE ---
+st.header("🤖 Basha Master: Smart Hunter (No Duplicates)")
+c1, c2 = st.columns([2,1])
+keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
+count = c2.slider("Leads Needed", 5, user_limit, 5)
+
+if st.button("🚀 Start Vettai"):
+    st.info("🌐 Starting Cloud Browser...")
+    
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-
-    status_box.info("🌐 Opening Google Maps... (Wait 30s)")
+    
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()),
+        options=options
+    )
     
     try:
-        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
-        driver = webdriver.Chrome(service=service, options=options)
-        
         driver.get("https://www.google.com/maps")
-        time.sleep(4)
-        
-        # Search
-        input_box = driver.find_element(By.ID, "searchboxinput")
-        input_box.send_keys(search_keyword)
-        input_box.send_keys(Keys.RETURN)
-        status_box.warning("🔍 Searching... & Loading Lists...")
+        time.sleep(3)
+        driver.find_element(By.ID, "searchboxinput").send_keys(keyword + Keys.RETURN)
         time.sleep(5)
         
-        scraped_data = []
+        status = st.empty()
+        collected_data = []
+        new_leads_count = 0
         
-        # Main Loop
-        side_panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
+        panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
         
-        count = 0
-        while count < target:
-            if st.session_state["stop_scan"]:
-                status_box.error("🛑 Scanning Stopped by User!")
-                break
-
-            # Scroll
-            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", side_panel)
+        scroll_attempts = 0
+        while new_leads_count < count and scroll_attempts < 20:
+            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", panel)
             time.sleep(2)
-            
             listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
             
-            if len(listings) <= count:
-                status_box.warning("🔄 Scrolling for more results...")
-                continue
+            for listing in listings:
+                if new_leads_count >= count: break
                 
-            # Pick the listing
-            current_listing = listings[count]
-            
-            try:
-                # Scroll into view & Click
-                driver.execute_script("arguments[0].scrollIntoView();", current_listing)
-                current_listing.click()
-                time.sleep(3) # Wait for details to load (Crucial for Phone Number)
-                
-                # Extract Data
-                name = current_listing.get_attribute("aria-label")
-                link = current_listing.get_attribute("href")
-                
-                # Try getting phone number (Tricky part)
-                phone = "Not Available"
                 try:
-                    # Searching for button with phone icon logic
-                    phone_btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
-                    if phone_btns:
-                        phone = phone_btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
-                except:
-                    pass
-
-                # Add to list
-                if name:
-                    scraped_data.append({
-                        "Name": name, 
-                        "Phone": phone,  # Phone number second column
-                        "Link": link     # Link last column
-                    })
-                    count += 1
-                    status_box.success(f"✅ Found: {name} | 📞 {phone}")
+                    # Smart logic to avoid clicking duplicates
+                    link = listing.get_attribute("href")
                     
-                    # Live Table Update
-                    df = pd.DataFrame(scraped_data)
-                    data_box.dataframe(df, use_container_width=True)
+                    # Check 1: Link already taken?
+                    if link in st.session_state["global_leads_db"]:
+                        continue 
+
+                    driver.execute_script("arguments[0].scrollIntoView();", listing)
+                    listing.click()
+                    time.sleep(2.5)
+                    
+                    name = listing.get_attribute("aria-label")
+                    
+                    # Get Phone
+                    phone = "No Number"
+                    try:
+                        p_btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
+                        if p_btns:
+                            phone = p_btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
+                    except: pass
+                    
+                    # Check 2: Phone Number already taken? (VERY IMPORTANT)
+                    if phone != "No Number" and phone in st.session_state["global_leads_db"]:
+                        status.warning(f"⚠️ Skipping {name} ({phone}) - Already taken by someone!")
+                        continue
+                    
+                    # If Unique, Save it!
+                    if name:
+                        collected_data.append({"Name": name, "Phone": phone, "Link": link})
+                        
+                        # Mark as Taken in Global DB
+                        st.session_state["global_leads_db"].add(link)
+                        if phone != "No Number":
+                            st.session_state["global_leads_db"].add(phone)
+                            
+                        new_leads_count += 1
+                        status.success(f"✅ Secured: {name} | 📞 {phone}")
+                        
+                except: pass
+            scroll_attempts += 1
             
-            except Exception as e:
-                # Skip errors
-                pass
+        # --- LOGGING THE ACTIVITY ---
+        if collected_data:
+            # Record in Admin Log
+            log_entry = {
+                "User": current_user,
+                "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Keyword": keyword,
+                "Leads Extracted": len(collected_data)
+            }
+            st.session_state["activity_log"].append(log_entry)
+            
+            st.success(f"🎉 Mission Success! {len(collected_data)} Unique Leads Found.")
+            csv = pd.DataFrame(collected_data).to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Unique CSV", csv, "basha_unique_leads.csv", "text/csv")
+        else:
+            st.error("❌ No New Unique Leads found! All leads in this area might be taken.")
 
     except Exception as e:
-        status_box.error(f"Error: {e}")
-    
+        st.error(f"Error: {e}")
     finally:
         driver.quit()
-        stop_btn_placeholder.empty() # Hide stop button
-        
-        if scraped_data:
-            status_box.success(f"🎉 Vettai Mudinjathu! Total {len(scraped_data)} Leads.")
-            csv = pd.DataFrame(scraped_data).to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Excel (CSV)", csv, "basha_leads.csv", "text/csv")
