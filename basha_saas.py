@@ -16,11 +16,9 @@ if "user_db" not in st.session_state:
         "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
     }
 
-# Global Duplicate Checker (Link & Phone)
 if "global_leads_db" not in st.session_state:
     st.session_state["global_leads_db"] = set()
 
-# Activity Log (For Admin Report)
 if "activity_log" not in st.session_state:
     st.session_state["activity_log"] = []
 
@@ -61,6 +59,12 @@ if not st.session_state["logged_in"]:
 # --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 current_role = st.session_state["role"]
+
+# Handle deleted user case (if logged in user gets deleted)
+if current_user not in st.session_state["user_db"]:
+    st.session_state["logged_in"] = False
+    st.rerun()
+
 user_info = st.session_state["user_db"][current_user]
 user_limit = user_info["daily_limit"]
 
@@ -70,10 +74,10 @@ if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
     st.rerun()
 
-# --- 👑 ADMIN PANEL (Users & Reports) ---
+# --- 👑 ADMIN PANEL (Manage Users) ---
 if current_role == "owner":
     st.title("🛠️ Admin Control Center")
-    tab1, tab2, tab3 = st.tabs(["➕ Add User", "👥 User List", "📊 Download Reports"])
+    tab1, tab2, tab3 = st.tabs(["➕ Add User", "🚫 Manage Users (Block/Delete)", "📊 Download Reports"])
     
     with tab1:
         with st.form("add_user"):
@@ -84,34 +88,73 @@ if current_role == "owner":
             nl = c3.number_input("Daily Limit", value=50)
             nd = c4.selectbox("Duration", ["15 Days", "30 Days", "1 Year"])
             if st.form_submit_button("Create User"):
-                days = 15 if nd == "15 Days" else 30 if nd == "30 Days" else 365
-                exp = (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
-                st.session_state["user_db"][nu] = {"password": np, "role": "client", "expiry": exp, "daily_limit": nl}
-                st.success(f"User {nu} Created!")
+                if nu in st.session_state["user_db"]:
+                    st.error("Username already exists!")
+                else:
+                    days = 15 if nd == "15 Days" else 30 if nd == "30 Days" else 365
+                    exp = (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+                    st.session_state["user_db"][nu] = {"password": np, "role": "client", "expiry": exp, "daily_limit": nl}
+                    st.success(f"User {nu} Created!")
 
     with tab2:
-        st.subheader("Active Users")
-        # Convert DB to DataFrame for nice display
+        st.subheader("🚫 Block or Remove Users")
+        
+        # Convert DB to DataFrame
         users_data = []
         for u, data in st.session_state["user_db"].items():
-            users_data.append({"Username": u, "Password": data["password"], "Expiry": data["expiry"], "Limit": data["daily_limit"]})
-        st.dataframe(pd.DataFrame(users_data), use_container_width=True)
+            users_data.append({
+                "Username": u, 
+                "Password": data["password"], 
+                "Expiry": data["expiry"], 
+                "Limit": data["daily_limit"],
+                "Delete": False # Checkbox column
+            })
+        
+        df = pd.DataFrame(users_data)
+        
+        # Editable Dataframe
+        edited_df = st.data_editor(
+            df, 
+            column_config={
+                "Delete": st.column_config.CheckboxColumn(
+                    "Delete User?",
+                    help="Check this box to remove user",
+                    default=False,
+                )
+            },
+            disabled=["Username"], # Cannot change username
+            hide_index=True,
+            key="user_editor"
+        )
+        
+        if st.button("💾 Save Changes (Delete Selected)"):
+            # Find users marked for deletion
+            users_to_delete = edited_df[edited_df["Delete"] == True]["Username"].tolist()
+            
+            if "basha" in users_to_delete:
+                st.error("❌ You cannot delete the Owner (Basha)!")
+            elif users_to_delete:
+                for u in users_to_delete:
+                    del st.session_state["user_db"][u]
+                st.success(f"✅ Deleted {len(users_to_delete)} users successfully!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.info("No changes made.")
 
     with tab3:
         st.subheader("📥 Download Activity Report")
         if st.session_state["activity_log"]:
             df_log = pd.DataFrame(st.session_state["activity_log"])
             st.dataframe(df_log, use_container_width=True)
-            
-            # Download Button for Report
             csv_report = df_log.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Admin Report (Excel/CSV)", csv_report, "basha_admin_report.csv", "text/csv")
+            st.download_button("📥 Download Admin Report", csv_report, "basha_admin_report.csv", "text/csv")
         else:
             st.info("No activity yet.")
     
     st.markdown("---")
 
-# --- 🕵️‍♂️ STABLE SCRAPER (Crash Proof) ---
+# --- 🕵️‍♂️ STABLE SCRAPER ---
 st.header("🤖 Basha Master: Stable Hunter")
 c1, c2 = st.columns([2,1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
@@ -140,8 +183,7 @@ if st.button("🚀 Start Vettai (Stable Mode)"):
         driver.find_element(By.ID, "searchboxinput").send_keys(keyword + Keys.RETURN)
         time.sleep(5)
         
-        # Step 1: Collect LINKS first (Strings don't crash)
-        status.warning("🔄 Scanning List... Please Wait...")
+        status.warning("🔄 Scanning List...")
         panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
         
         links_to_visit = set()
@@ -152,75 +194,55 @@ if st.button("🚀 Start Vettai (Stable Mode)"):
             elements = driver.find_elements(By.CLASS_NAME, "hfpxzc")
             for elem in elements:
                 l = elem.get_attribute("href")
-                if l not in st.session_state["global_leads_db"]: # Check duplicate
+                if l not in st.session_state["global_leads_db"]:
                     links_to_visit.add(l)
             scrolls += 1
         
-        status.info(f"✅ Found {len(links_to_visit)} potential targets. Visiting one by one...")
+        status.info(f"✅ Found targets. Extracting details...")
         
-        # Step 2: Visit Links Directly (100% Stable)
         processed_count = 0
         unique_links = list(links_to_visit)[:count]
-        
         progress_bar = st.progress(0)
         
         for i, link in enumerate(unique_links):
             try:
-                driver.get(link) # Direct Navigation (No Click Error)
+                driver.get(link)
                 time.sleep(2.5)
                 
-                # Extract Name
-                try:
-                    name = driver.find_element(By.XPATH, '//h1[contains(@class, "DUwDvf")]').text
-                except:
-                    name = "Unknown"
+                try: name = driver.find_element(By.XPATH, '//h1[contains(@class, "DUwDvf")]').text
+                except: name = "Unknown"
                 
-                # Extract Phone
                 phone = "No Number"
                 try:
                     p_btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
-                    if p_btns:
-                        phone = p_btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
+                    if p_btns: phone = p_btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
 
-                # Phone Duplicate Check
                 if phone != "No Number" and phone in st.session_state["global_leads_db"]:
-                    continue # Skip duplicate numbers
+                    continue
                 
-                # Save
                 collected_data.append({"Name": name, "Phone": phone, "Link": link})
                 
-                # Mark as taken
                 st.session_state["global_leads_db"].add(link)
-                if phone != "No Number":
-                    st.session_state["global_leads_db"].add(phone)
+                if phone != "No Number": st.session_state["global_leads_db"].add(phone)
                 
                 processed_count += 1
-                status.success(f"✅ Secured ({processed_count}/{count}): {name} | {phone}")
+                status.success(f"✅ Secured ({processed_count}): {name} | {phone}")
                 progress_bar.progress((i + 1) / len(unique_links))
                 
-            except Exception as e:
-                continue # Skip bad links
+            except: continue
         
-        # --- SAVE & LOG ---
         if collected_data:
-            # Log Activity for Admin
             st.session_state["activity_log"].append({
-                "User": current_user,
-                "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "Keyword": keyword,
-                "Leads_Count": len(collected_data)
+                "User": current_user, "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Keyword": keyword, "Leads_Count": len(collected_data)
             })
             
-            st.success(f"🎉 Mission Success! {len(collected_data)} Leads Collected.")
-            
-            # Download Button for User
             csv = pd.DataFrame(collected_data).to_csv(index=False).encode('utf-8')
-            st.download_button(f"📥 Download {keyword} Leads", csv, "leads.csv", "text/csv")
+            st.success(f"🎉 {len(collected_data)} Leads Collected.")
+            st.download_button(f"📥 Download CSV", csv, "leads.csv", "text/csv")
         else:
-            st.warning("No new leads found (All might be duplicates).")
+            st.warning("No new unique leads found.")
 
-    except Exception as e:
-        st.error(f"Critical Error: {e}")
-    finally:
-        driver.quit()
+    except Exception as e: st.error(f"Error: {e}")
+    finally: driver.quit()
