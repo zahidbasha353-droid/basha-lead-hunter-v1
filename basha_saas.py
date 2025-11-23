@@ -44,7 +44,7 @@ if "db_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V12", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V13", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def generate_coupon(days, limit):
@@ -66,7 +66,7 @@ def make_login_share_link(phone, user, pwd):
     msg = f"🦁 *Welcome to Basha Empire!* 🦁%0A%0AHere are your Login Details:%0A👤 *Username:* {user}%0A🔑 *Password:* {pwd}%0A%0ALogin to start hunting leads!"
     return f"https://wa.me/{clean_num}?text={msg}"
 
-# --- 🔐 SIMPLE LOGIN SYSTEM (No Register) ---
+# --- 🔐 SIMPLE LOGIN SYSTEM ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["user"] = None
@@ -76,7 +76,7 @@ if not st.session_state["logged_in"]:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<h2 style='text-align: center;'>🔐 Basha Master Access</h2>", unsafe_allow_html=True)
-        st.info("👋 Welcome! Please enter your ID & Password given by Admin.")
+        st.info("👋 Welcome! Please enter your ID & Password.")
         
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
@@ -100,38 +100,31 @@ if current_user not in db["users"]:
     st.rerun()
 user_data = db["users"][current_user]
 
-# Sidebar Info
+# Sidebar
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.badge(role.upper())
 st.sidebar.metric("⚡ Daily Limit", f"{user_data['daily_limit']}")
 st.sidebar.caption(f"📅 Valid till: {user_data['expiry']}")
 
-# --- 💎 RECHARGE / REDEEM (INSIDE APP) ---
-# Ippo user ulla vanthathuku aparam dhaan coupon poda mudiyum
 if role == "client":
     with st.sidebar.expander("🎁 Redeem Coupon / Recharge", expanded=True):
-        st.write("Got a code from Basha Master? Enter here.")
-        recharge_code = st.text_input("Enter Code (e.g., BAS1234)")
+        st.write("Enter Code here:")
+        recharge_code = st.text_input("Code (e.g., BAS1234)")
         
         if st.button("✅ Apply Code"):
             if recharge_code in db["coupons"]:
                 data = db["coupons"][recharge_code]
-                
-                # Update Validity & Limit
                 new_expiry = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
                 db["users"][current_user]["daily_limit"] = data['limit']
                 db["users"][current_user]["expiry"] = new_expiry
-                
-                # Delete Used Code
                 del db["coupons"][recharge_code]
                 save_data(db)
-                
                 st.balloons()
-                st.success(f"🎉 Success! Limit: {data['limit']}, Valid till: {new_expiry}")
+                st.success(f"🎉 Success! Limit: {data['limit']}")
                 time.sleep(2)
                 st.rerun()
             else:
-                st.error("❌ Invalid or Used Code")
+                st.error("❌ Invalid Code")
 
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
@@ -140,11 +133,10 @@ if st.sidebar.button("Logout", type="primary"):
 # --- 👑 ADMIN EMPIRE ---
 if role == "owner":
     st.title("🛠️ Admin Empire")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Add User", "🎟️ Create Coupons", "👥 Manage Users", "📊 Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Add User", "🎟️ Coupons", "👥 Manage Users", "📊 Reports"])
     
-    # 1. DIRECT ADD (With WhatsApp Greeting)
     with tab1:
-        st.subheader("➕ Create New User")
+        st.subheader("➕ Create User")
         with st.form("manual_add"):
             c1, c2 = st.columns(2)
             mu = c1.text_input("New Username")
@@ -155,8 +147,7 @@ if role == "owner":
             m_phone = st.text_input("Phone (Optional)", placeholder="9876543210")
             
             if st.form_submit_button("Create User"):
-                if mu in db["users"]:
-                    st.error("Username exists!")
+                if mu in db["users"]: st.error("Username exists!")
                 else:
                     exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
                     db["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "daily_limit": ml}
@@ -166,7 +157,6 @@ if role == "owner":
                         wa_link = make_login_share_link(m_phone, mu, mp)
                         st.markdown(f'<a href="{wa_link}" target="_blank"><button style="background:#25D366;color:white;border:none;padding:8px;">📲 Send Login via WhatsApp</button></a>', unsafe_allow_html=True)
 
-    # 2. GENERATE COUPONS (For Recharge/Offers)
     with tab2:
         st.subheader("🎟️ Generate Recharge Codes")
         c1, c2 = st.columns(2)
@@ -176,13 +166,11 @@ if role == "owner":
             code = generate_coupon(days, limit)
             st.success(f"Code: {code}")
             st.code(code)
-            st.info("Give this code to your client to enter in their Sidebar.")
         
         if db["coupons"]:
             st.write("### Active Coupons")
             st.json(db["coupons"])
 
-    # 3. MANAGE USERS
     with tab3:
         st.subheader("Active Users")
         users_list = [{"Username": u, "Pass": d["password"], "Exp": d["expiry"], "Limit": d["daily_limit"], "Delete": False} 
@@ -199,7 +187,6 @@ if role == "owner":
                 time.sleep(1)
                 st.rerun()
 
-    # 4. REPORTS
     with tab4:
         if db["logs"]:
             df = pd.DataFrame(db["logs"])
@@ -207,18 +194,25 @@ if role == "owner":
             st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
         else: st.info("No data.")
 
-# --- 🕵️‍♂️ SCRAPER V12 ---
-st.header("🦁 Basha Master V12: The Beast")
+# --- 🕵️‍♂️ SCRAPER V13 (BUG FIX) ---
+st.header("🦁 Basha Master V13: The Beast")
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
 if date.today() > exp_date and role != "owner":
-    st.error("⛔ PLAN EXPIRED! Please enter a Recharge Code in the sidebar.")
+    st.error("⛔ PLAN EXPIRED! Please Recharge.")
     st.stop()
 
 c1, c2, c3 = st.columns([2, 1, 1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
-count = c2.slider("Leads Needed", 5, user_data['daily_limit'], 5)
+
+# --- BUG FIX START ---
+# Minimum value 1 ah maathiten. Default value safe ah set panni iruken.
+daily_limit = user_data['daily_limit']
+default_slider = 5 if daily_limit >= 5 else daily_limit
+count = c2.slider("Leads Needed", 1, daily_limit, default_slider)
+# --- BUG FIX END ---
+
 min_rating = c3.slider("⭐ Min Rating", 0.0, 5.0, 3.5, 0.5)
 enable_email = st.checkbox("📧 Enable Email Extraction")
 
