@@ -5,6 +5,8 @@ import re
 import requests
 import random
 import string
+import json
+import os
 from datetime import datetime, timedelta, date
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,32 +16,49 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 from bs4 import BeautifulSoup
 
-# --- 🧠 CENTRAL MEMORY ---
-if "user_db" not in st.session_state:
-    st.session_state["user_db"] = {
-        "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "daily_limit": 10000},
-        "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
+# --- 📂 PERMANENT FILE STORAGE SYSTEM ---
+DB_FILE = "basha_database.json"
+
+def load_data():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    # Default Data if file doesn't exist
+    return {
+        "users": {
+            "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "daily_limit": 10000},
+            "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
+        },
+        "coupons": {
+            "BASHA100": {"days": 365, "limit": 100} # Master Coupon
+        },
+        "leads": [], # To store taken leads link to avoid duplicates
+        "logs": []
     }
 
-# 🔥 PERMANENT MASTER COUPON ADDED HERE 🔥
-if "redeem_codes" not in st.session_state:
-    st.session_state["redeem_codes"] = {
-        "BASHA100": {"days": 365, "limit": 100}  # Ithu eppovume work aagum
-    }
+def save_data(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-if "global_leads_db" not in st.session_state:
-    st.session_state["global_leads_db"] = set()
+# Load DB into Session State
+if "db_data" not in st.session_state:
+    st.session_state["db_data"] = load_data()
 
-if "activity_log" not in st.session_state:
-    st.session_state["activity_log"] = []
+# Shortcut variables for easy access
+db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V10", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V11", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def generate_coupon(days, limit):
     suffix = ''.join(random.choices(string.digits, k=4))
     code = f"BAS{suffix}"
-    st.session_state["redeem_codes"][code] = {"days": days, "limit": limit}
+    # Update DB
+    db["coupons"][code] = {"days": days, "limit": limit}
+    save_data(db) # Save to File immediately
     return code
 
 def make_whatsapp_link(phone):
@@ -61,7 +80,7 @@ if "logged_in" not in st.session_state:
     st.session_state["role"] = None
 
 if not st.session_state["logged_in"]:
-    st.markdown("## 🔐 Basha Master Access")
+    st.markdown("## 🔐 Basha Master Access (V11)")
     
     tab_login, tab_redeem = st.tabs(["🔑 Login", "🎟️ Redeem Code (New User)"])
     
@@ -69,34 +88,38 @@ if not st.session_state["logged_in"]:
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
         if st.button("Login"):
-            db = st.session_state["user_db"]
-            if u in db and db[u]["password"] == p:
+            users = db["users"]
+            if u in users and users[u]["password"] == p:
                 st.session_state["logged_in"] = True
                 st.session_state["user"] = u
-                st.session_state["role"] = db[u]["role"]
+                st.session_state["role"] = users[u]["role"]
                 st.rerun()
             else: st.error("❌ Wrong ID/Password")
 
     with tab_redeem:
-        st.info("💡 Tip: Use code 'BASHA100' for instant registration.")
+        st.info("💡 Data is now saved permanently in file.")
         new_u = st.text_input("Choose Username")
         new_p = st.text_input("Choose Password", type="password")
         coupon = st.text_input("Enter Coupon Code")
         
         if st.button("🚀 Redeem & Register"):
-            if coupon in st.session_state["redeem_codes"]:
-                if new_u in st.session_state["user_db"]:
+            if coupon in db["coupons"]:
+                if new_u in db["users"]:
                     st.error("⚠️ Username taken!")
                 else:
-                    details = st.session_state["redeem_codes"][coupon]
+                    details = db["coupons"][coupon]
                     exp_date = (date.today() + timedelta(days=details['days'])).strftime("%Y-%m-%d")
-                    st.session_state["user_db"][new_u] = {
+                    
+                    # Create User
+                    db["users"][new_u] = {
                         "password": new_p, "role": "client", "expiry": exp_date, "daily_limit": details['limit']
                     }
-                    # Don't delete master coupon, delete others
-                    if coupon != "BASHA100":
-                        del st.session_state["redeem_codes"][coupon]
                     
+                    # Delete Code (unless Master)
+                    if coupon != "BASHA100":
+                        del db["coupons"][coupon]
+                    
+                    save_data(db) # SAVE TO FILE
                     st.success("✅ Account Created! Login Now.")
             else: st.error("❌ Invalid Code!")
     st.stop()
@@ -104,10 +127,10 @@ if not st.session_state["logged_in"]:
 # --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 role = st.session_state["role"]
-if current_user not in st.session_state["user_db"]:
+if current_user not in db["users"]:
     st.session_state["logged_in"] = False
     st.rerun()
-user_data = st.session_state["user_db"][current_user]
+user_data = db["users"][current_user]
 
 # Sidebar
 st.sidebar.title(f"👤 {current_user.capitalize()}")
@@ -119,13 +142,17 @@ if role == "client":
     with st.sidebar.expander("💎 Recharge / Top-up"):
         recharge_code = st.text_input("Enter Coupon Code")
         if st.button("Apply"):
-            if recharge_code in st.session_state["redeem_codes"]:
-                data = st.session_state["redeem_codes"][recharge_code]
+            if recharge_code in db["coupons"]:
+                data = db["coupons"][recharge_code]
                 new_expiry = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
-                st.session_state["user_db"][current_user]["daily_limit"] = data['limit']
-                st.session_state["user_db"][current_user]["expiry"] = new_expiry
+                
+                db["users"][current_user]["daily_limit"] = data['limit']
+                db["users"][current_user]["expiry"] = new_expiry
+                
                 if recharge_code != "BASHA100":
-                    del st.session_state["redeem_codes"][recharge_code]
+                    del db["coupons"][recharge_code]
+                
+                save_data(db) # SAVE
                 st.success("✅ Recharge Successful!")
                 time.sleep(1)
                 st.rerun()
@@ -143,14 +170,15 @@ if role == "owner":
     with tab1:
         st.subheader("Active Users List")
         users_list = [{"Username": u, "Pass": d["password"], "Exp": d["expiry"], "Limit": d["daily_limit"], "Delete": False} 
-                      for u, d in st.session_state["user_db"].items()]
+                      for u, d in db["users"].items()]
         edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False)}, 
                                    disabled=["Username"], hide_index=True, key="user_editor")
         if st.button("🗑️ Delete Selected"):
             to_delete = edited_df[edited_df["Delete"] == True]["Username"].tolist()
             if "basha" in to_delete: st.error("❌ Can't delete Owner!")
             elif to_delete:
-                for u in to_delete: del st.session_state["user_db"][u]
+                for u in to_delete: del db["users"][u]
+                save_data(db) # SAVE
                 st.success(f"✅ Deleted: {to_delete}")
                 time.sleep(1)
                 st.rerun()
@@ -167,11 +195,12 @@ if role == "owner":
             m_phone = st.text_input("Phone (Optional)", placeholder="9876543210")
             
             if st.form_submit_button("Create User"):
-                if mu in st.session_state["user_db"]:
+                if mu in db["users"]:
                     st.error("Username exists!")
                 else:
                     exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
-                    st.session_state["user_db"][mu] = {"password": mp, "role": "client", "expiry": exp, "daily_limit": ml}
+                    db["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "daily_limit": ml}
+                    save_data(db) # SAVE
                     st.success(f"✅ User '{mu}' Created!")
                     if m_phone:
                         wa_link = make_login_share_link(m_phone, mu, mp)
@@ -188,17 +217,17 @@ if role == "owner":
             st.code(code)
         
         st.write("### Active Coupons")
-        st.json(st.session_state["redeem_codes"])
+        st.json(db["coupons"])
 
     with tab4:
-        if st.session_state["activity_log"]:
-            df = pd.DataFrame(st.session_state["activity_log"])
+        if db["logs"]:
+            df = pd.DataFrame(db["logs"])
             st.dataframe(df)
             st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
         else: st.info("No data.")
 
-# --- 🕵️‍♂️ SCRAPER V10 ---
-st.header("🦁 Basha Master V10: The Beast")
+# --- 🕵️‍♂️ SCRAPER V11 ---
+st.header("🦁 Basha Master V11: The Beast")
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
@@ -242,7 +271,8 @@ if st.button("🚀 Start Vettai"):
                     try: rating = float(re.search(r"(\d\.\d)", elem.find_element(By.XPATH, "./..").text).group(1))
                     except: pass
                     l = elem.get_attribute("href")
-                    if rating >= min_rating and l not in st.session_state["global_leads_db"]: links_to_visit.add(l)
+                    # Check Global Leads from DB File
+                    if rating >= min_rating and l not in db["leads"]: links_to_visit.add(l)
                 except: pass
             scrolls += 1
         
@@ -261,7 +291,8 @@ if st.button("🚀 Start Vettai"):
                     btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
                     if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
-                if phone != "No Number" and phone in st.session_state["global_leads_db"]: continue
+                
+                if phone != "No Number" and phone in db["leads"]: continue
                 email, website = "Skipped", "Not Found"
                 if enable_email:
                     try:
@@ -275,16 +306,22 @@ if st.button("🚀 Start Vettai"):
                             except: pass
                     except: pass
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
-                st.session_state["global_leads_db"].add(link)
-                if phone != "No Number": st.session_state["global_leads_db"].add(phone)
+                
+                # Update DB (Leads)
+                db["leads"].append(link)
+                if phone != "No Number": db["leads"].append(phone)
+                
                 status.success(f"✅ Secured: {name} | {phone}")
                 progress.progress((i+1)/len(unique_links))
             except: continue
             
         if collected_data:
+            # Update DB (Logs)
+            db["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Time": str(datetime.now())})
+            save_data(db) # SAVE EVERYTHING
+            
             df = pd.DataFrame(collected_data)
             st.data_editor(df, column_config={"WhatsApp": st.column_config.LinkColumn("Chat", display_text="📲 Chat"), "Website": st.column_config.LinkColumn("Site")}, hide_index=True)
-            st.session_state["activity_log"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Time": datetime.now()})
             st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8'), "leads.csv", "text/csv")
         else: st.warning("No leads found.")
     except Exception as e: st.error(f"Error: {e}")
