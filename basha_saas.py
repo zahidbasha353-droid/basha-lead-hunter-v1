@@ -25,10 +25,10 @@ def load_data():
         try:
             with open(DB_FILE, "r") as f:
                 data = json.load(f)
-                # Migration check (Old DB to New DB compatibility)
+                # Auto-Fix: Ensure all users have 'credits' key
                 for u in data["users"]:
                     if "credits" not in data["users"][u]:
-                        data["users"][u]["credits"] = 100 # Give free credits to old users
+                        data["users"][u]["credits"] = 0 
                 return data
         except: pass
     return {
@@ -36,7 +36,9 @@ def load_data():
             "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "credits": 50000},
             "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "credits": 50}
         },
-        "coupons": {},
+        "coupons": {
+            "BASHA100": {"days": 365, "amount": 1000} # Master Coupon
+        },
         "leads": [],
         "logs": []
     }
@@ -45,19 +47,25 @@ def save_data(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+# Load Data initially
 if "db_data" not in st.session_state:
     st.session_state["db_data"] = load_data()
 
+# Shortcut
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V14", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V15", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def generate_coupon(days, amount):
     suffix = ''.join(random.choices(string.digits, k=4))
     code = f"BAS{suffix}"
-    db["coupons"][code] = {"days": days, "amount": amount}
-    save_data(db)
+    # MUKKIYAM: Load fresh DB before saving to avoid overwriting
+    current_db = load_data()
+    current_db["coupons"][code] = {"days": days, "amount": amount}
+    save_data(current_db)
+    # Sync session state
+    st.session_state["db_data"] = current_db
     return code
 
 def make_whatsapp_link(phone):
@@ -85,27 +93,35 @@ if not st.session_state["logged_in"]:
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
         if st.button("🚀 Login", use_container_width=True):
-            users = db["users"]
-            if u in users and users[u]["password"] == p:
+            # Always load fresh data on login
+            fresh_db = load_data()
+            st.session_state["db_data"] = fresh_db
+            
+            if u in fresh_db["users"] and fresh_db["users"][u]["password"] == p:
                 st.session_state["logged_in"] = True
                 st.session_state["user"] = u
-                st.session_state["role"] = users[u]["role"]
+                st.session_state["role"] = fresh_db["users"][u]["role"]
                 st.rerun()
             else: st.error("❌ Incorrect Username or Password")
     st.stop()
 
-# --- 🖥️ DASHBOARD & UI ---
+# --- 🖥️ DASHBOARD ---
 current_user = st.session_state["user"]
 role = st.session_state["role"]
+
+# Reload DB to get latest balance
+db = load_data()
+st.session_state["db_data"] = db
+
 if current_user not in db["users"]:
     st.session_state["logged_in"] = False
     st.rerun()
 user_data = db["users"][current_user]
 
-# --- 💰 TOP RIGHT CREDITS DISPLAY ---
+# --- 💰 TOP RIGHT CREDITS ---
 col_head1, col_head2 = st.columns([4, 1])
 with col_head1:
-    st.title("🦁 Basha Master V14")
+    st.title("🦁 Basha Master V15")
 with col_head2:
     st.metric(label="💰 Wallet Balance", value=f"₹{user_data.get('credits', 0)}")
 
@@ -113,36 +129,47 @@ with col_head2:
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.caption(f"📅 Valid till: {user_data['expiry']}")
 
-# --- 💎 SIDEBAR RECHARGE ---
+# --- 💎 RECHARGE SYSTEM (FIXED SYNC ISSUE) ---
 if role == "client":
     with st.sidebar.expander("💎 Wallet / Recharge", expanded=True):
-        st.write(f"**Current Balance: ₹{user_data.get('credits', 0)}**")
-        st.write(f"Cost per Lead: ₹{LEAD_COST}")
-        
+        st.write(f"**Balance: ₹{user_data.get('credits', 0)}**")
+        st.write(f"Cost: ₹{LEAD_COST}/lead")
         st.markdown("---")
-        st.write("Scan to pay:")
-        # Replace this URL with your actual QR Code Image
+        st.write("Scan to Pay:")
         st.image("https://upload.wikimedia.org/wikipedia/commons/d/d0/QR_code_for_mobile_English_Wikipedia.svg", caption="UPI: basha@okicici")
-        st.caption("Send screenshot to Admin to get Code.")
-        
         st.markdown("---")
+        
         recharge_code = st.text_input("Enter Coupon Code")
         if st.button("✅ Add Money"):
-            if recharge_code in db["coupons"]:
-                data = db["coupons"][recharge_code]
+            # 🔥 CRITICAL FIX: Load DB from file AGAIN to see new codes
+            fresh_db = load_data()
+            
+            if recharge_code in fresh_db["coupons"]:
+                data = fresh_db["coupons"][recharge_code]
                 
-                # Update Credits & Validity
-                db["users"][current_user]["credits"] += data['amount']
+                # Check if it's amount or limit (Backward compatibility)
+                add_amount = data.get('amount', 0)
+                if add_amount == 0 and 'limit' in data:
+                     add_amount = data['limit'] # Fallback for old codes
+                
+                # Update User
+                fresh_db["users"][current_user]["credits"] += add_amount
                 new_expiry = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
-                db["users"][current_user]["expiry"] = new_expiry
+                fresh_db["users"][current_user]["expiry"] = new_expiry
                 
-                del db["coupons"][recharge_code]
-                save_data(db)
+                # Delete Code (Unless Master)
+                if recharge_code != "BASHA100":
+                    del fresh_db["coupons"][recharge_code]
+                
+                save_data(fresh_db)
+                st.session_state["db_data"] = fresh_db # Update Session
+                
                 st.balloons()
-                st.success(f"🎉 Added ₹{data['amount']}!")
+                st.success(f"🎉 Success! Added ₹{add_amount}")
                 time.sleep(2)
                 st.rerun()
-            else: st.error("❌ Invalid Code")
+            else:
+                st.error("❌ Invalid Code (Try refreshing page)")
 
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
@@ -160,18 +187,18 @@ if role == "owner":
             mu = c1.text_input("Username")
             mp = c2.text_input("Password")
             c3, c4 = st.columns(2)
-            # Replaced Daily Limit with Initial Credits
             ml = c3.number_input("Initial Credits (₹)", 100)
             md = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
             m_phone = st.text_input("Phone (Optional)")
             
             if st.form_submit_button("Create User"):
-                if mu in db["users"]: st.error("Exists!")
+                fresh_db = load_data() # Always load fresh
+                if mu in fresh_db["users"]: st.error("Exists!")
                 else:
                     exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
-                    db["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "credits": ml}
-                    save_data(db)
-                    st.success(f"✅ User '{mu}' Created with ₹{ml}!")
+                    fresh_db["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "credits": ml}
+                    save_data(fresh_db)
+                    st.success(f"✅ User '{mu}' Created!")
                     if m_phone:
                         wa_link = make_login_share_link(m_phone, mu, mp)
                         st.markdown(f'<a href="{wa_link}" target="_blank"><button>📲 Send Login</button></a>', unsafe_allow_html=True)
@@ -186,20 +213,25 @@ if role == "owner":
             st.success(f"Code: {code}")
             st.code(code)
             st.info(f"Value: ₹{amount}")
-        if db["coupons"]: st.json(db["coupons"])
+        
+        # Load fresh to show list
+        fresh_db = load_data()
+        if fresh_db["coupons"]: st.json(fresh_db["coupons"])
 
     with tab3:
         st.subheader("Active Users")
-        # Display Credits instead of Limit
+        fresh_db = load_data()
         users_list = [{"User": u, "Pass": d["password"], "Exp": d["expiry"], "Balance": f"₹{d.get('credits',0)}", "Delete": False} 
-                      for u, d in db["users"].items()]
+                      for u, d in fresh_db["users"].items()]
         edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False)}, hide_index=True)
         if st.button("🗑️ Delete Selected"):
             to_delete = edited_df[edited_df["Delete"] == True]["User"].tolist()
             if "basha" in to_delete: st.error("Cannot delete Owner!")
             elif to_delete:
-                for u in to_delete: del db["users"][u]
-                save_data(db)
+                for u in to_delete: del fresh_db["users"][u]
+                save_data(fresh_db)
+                st.success("Deleted!")
+                time.sleep(1)
                 st.rerun()
 
     with tab4:
@@ -209,42 +241,34 @@ if role == "owner":
             st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
         else: st.info("No data.")
 
-# --- 🕵️‍♂️ SCRAPER V14 (BUSINESS LOGIC) ---
+# --- 🕵️‍♂️ SCRAPER V15 ---
 st.markdown("---")
 
-# 1. Check Expiry
-exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
-if date.today() > exp_date and role != "owner":
-    st.error("⛔ PLAN EXPIRED! Please Recharge.")
-    st.stop()
-
-# 2. Check Balance
+# Balance Check Logic
 current_balance = user_data.get('credits', 0)
-if current_balance < LEAD_COST and role != "owner":
-    st.error(f"⛔ Low Balance! You need at least ₹{LEAD_COST} to hunt.")
-    st.stop()
+max_leads_possible = int(current_balance / LEAD_COST) if role != "owner" else 1000
 
-# UI Inputs
+# UI
 c1, c2, c3 = st.columns([2, 1, 1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
 
-# Max leads possible with current balance
-max_leads_possible = int(current_balance / LEAD_COST) if role != "owner" else 1000
 slider_default = 5 if max_leads_possible >= 5 else 1
+if max_leads_possible == 0: slider_default = 0
 
-leads_requested = c2.slider("Leads Needed", 1, max_leads_possible, slider_default)
+leads_requested = c2.slider("Leads Needed", 0, max_leads_possible, slider_default)
 estimated_cost = leads_requested * LEAD_COST
-
 min_rating = c3.slider("⭐ Min Rating", 0.0, 5.0, 3.5, 0.5)
 enable_email = st.checkbox("📧 Enable Email Extraction")
 
-# Cost Warning
 if role != "owner":
-    st.info(f"💰 Estimated Cost: ₹{estimated_cost} (Current Balance: ₹{current_balance})")
+    if current_balance < LEAD_COST:
+        st.error(f"⛔ Low Balance! Min required: ₹{LEAD_COST}")
+    else:
+        st.info(f"💰 Cost: ₹{estimated_cost}")
 
 if st.button("🚀 Start Vettai"):
-    # Double Check Balance
-    if db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
+    fresh_db = load_data() # Critical Reload
+    if fresh_db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
         st.error("❌ Insufficient Funds!")
         st.stop()
 
@@ -277,7 +301,7 @@ if st.button("🚀 Start Vettai"):
                     try: rating = float(re.search(r"(\d\.\d)", elem.find_element(By.XPATH, "./..").text).group(1))
                     except: pass
                     l = elem.get_attribute("href")
-                    if rating >= min_rating and l not in db["leads"]: links_to_visit.add(l)
+                    if rating >= min_rating and l not in fresh_db["leads"]: links_to_visit.add(l)
                 except: pass
             scrolls += 1
         
@@ -285,10 +309,10 @@ if st.button("🚀 Start Vettai"):
         unique_links = list(links_to_visit)[:leads_requested]
         progress = st.progress(0)
         
-        # --- EXTRACTION LOOP ---
         for i, link in enumerate(unique_links):
-            # LIVE BALANCE CHECK
-            if db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
+            # LIVE BALANCE CHECK from FILE
+            fresh_db = load_data()
+            if fresh_db["users"][current_user]["credits"] < LEAD_COST and role != "owner":
                 status.error("❌ Balance Over! Stopping...")
                 break
 
@@ -303,7 +327,7 @@ if st.button("🚀 Start Vettai"):
                     if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
                 
-                if phone != "No Number" and phone in db["leads"]: continue
+                if phone != "No Number" and phone in fresh_db["leads"]: continue
                 
                 email, website = "Skipped", "Not Found"
                 if enable_email:
@@ -320,31 +344,30 @@ if st.button("🚀 Start Vettai"):
                 
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
                 
-                # UPDATE DB (Cost Deduction)
-                db["leads"].append(link)
-                if phone != "No Number": db["leads"].append(phone)
+                # UPDATE DB
+                fresh_db["leads"].append(link)
+                if phone != "No Number": fresh_db["leads"].append(phone)
                 
                 if role != "owner":
-                    db["users"][current_user]["credits"] -= LEAD_COST
+                    fresh_db["users"][current_user]["credits"] -= LEAD_COST
                 
-                save_data(db) # Save after every lead to be safe
+                save_data(fresh_db) # Save constantly
                 
-                status.success(f"✅ Secured: {name} | 💰 Bal: ₹{db['users'][current_user]['credits']}")
+                status.success(f"✅ Secured: {name} | 💰 Bal: ₹{fresh_db['users'][current_user]['credits']}")
                 progress.progress((i+1)/len(unique_links))
             except: continue
             
         if collected_data:
             total_cost = len(collected_data) * LEAD_COST
-            msg = f"Completed! Total Spent: ₹{total_cost}" if role != "owner" else "Completed!"
-            db["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
-            save_data(db)
+            fresh_db["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
+            save_data(fresh_db)
             
             df = pd.DataFrame(collected_data)
             st.data_editor(df, column_config={"WhatsApp": st.column_config.LinkColumn("Chat", display_text="📲 Chat"), "Website": st.column_config.LinkColumn("Site")}, hide_index=True)
             st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8'), "leads.csv", "text/csv")
-            st.success(msg)
+            st.success(f"Done! Spent: ₹{total_cost}")
             time.sleep(2)
-            st.rerun() # Refresh to update top right balance
+            st.rerun()
         else: st.warning("No leads found.")
     except Exception as e: st.error(f"Error: {e}")
     finally: driver.quit()
