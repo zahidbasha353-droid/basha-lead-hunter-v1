@@ -21,8 +21,11 @@ if "user_db" not in st.session_state:
         "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
     }
 
+# 🔥 PERMANENT MASTER COUPON ADDED HERE 🔥
 if "redeem_codes" not in st.session_state:
-    st.session_state["redeem_codes"] = {}
+    st.session_state["redeem_codes"] = {
+        "BASHA100": {"days": 365, "limit": 100}  # Ithu eppovume work aagum
+    }
 
 if "global_leads_db" not in st.session_state:
     st.session_state["global_leads_db"] = set()
@@ -30,7 +33,7 @@ if "global_leads_db" not in st.session_state:
 if "activity_log" not in st.session_state:
     st.session_state["activity_log"] = []
 
-st.set_page_config(page_title="Basha Master V9", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V10", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def generate_coupon(days, limit):
@@ -46,10 +49,9 @@ def make_whatsapp_link(phone):
     return f"https://wa.me/{clean_num}?text=Hi,%20saw%20your%20business%20on%20Google!"
 
 def make_login_share_link(phone, user, pwd):
-    # Creates a WhatsApp message with login details
     clean_num = re.sub(r'\D', '', phone)
     if len(clean_num) == 10: clean_num = "91" + clean_num
-    msg = f"🦁 *Welcome to Basha Empire!* 🦁%0A%0AHere are your Login Details:%0A👤 *Username:* {user}%0A🔑 *Password:* {pwd}%0A%0ALogin here: [Your_App_Link]"
+    msg = f"🦁 *Welcome to Basha Empire!* 🦁%0A%0AHere are your Login Details:%0A👤 *Username:* {user}%0A🔑 *Password:* {pwd}"
     return f"https://wa.me/{clean_num}?text={msg}"
 
 # --- 🔐 LOGIN SYSTEM ---
@@ -76,7 +78,7 @@ if not st.session_state["logged_in"]:
             else: st.error("❌ Wrong ID/Password")
 
     with tab_redeem:
-        st.caption("Use this ONLY if you have a Coupon Code.")
+        st.info("💡 Tip: Use code 'BASHA100' for instant registration.")
         new_u = st.text_input("Choose Username")
         new_p = st.text_input("Choose Password", type="password")
         coupon = st.text_input("Enter Coupon Code")
@@ -91,8 +93,11 @@ if not st.session_state["logged_in"]:
                     st.session_state["user_db"][new_u] = {
                         "password": new_p, "role": "client", "expiry": exp_date, "daily_limit": details['limit']
                     }
-                    del st.session_state["redeem_codes"][coupon]
-                    st.success("✅ Account Created!")
+                    # Don't delete master coupon, delete others
+                    if coupon != "BASHA100":
+                        del st.session_state["redeem_codes"][coupon]
+                    
+                    st.success("✅ Account Created! Login Now.")
             else: st.error("❌ Invalid Code!")
     st.stop()
 
@@ -119,7 +124,8 @@ if role == "client":
                 new_expiry = (date.today() + timedelta(days=data['days'])).strftime("%Y-%m-%d")
                 st.session_state["user_db"][current_user]["daily_limit"] = data['limit']
                 st.session_state["user_db"][current_user]["expiry"] = new_expiry
-                del st.session_state["redeem_codes"][recharge_code]
+                if recharge_code != "BASHA100":
+                    del st.session_state["redeem_codes"][recharge_code]
                 st.success("✅ Recharge Successful!")
                 time.sleep(1)
                 st.rerun()
@@ -132,10 +138,8 @@ if st.sidebar.button("Logout", type="primary"):
 # --- 👑 ADMIN EMPIRE (UPDATED) ---
 if role == "owner":
     st.title("🛠️ Admin Empire")
-    # 4 TABS NOW
-    tab1, tab2, tab3, tab4 = st.tabs(["👥 Manage Users", "➕ Direct Add User", "🎟️ Generate Coupons", "📊 Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 Manage Users", "➕ Direct Add", "🎟️ Coupons", "📊 Reports"])
     
-    # TAB 1: LIST & DELETE
     with tab1:
         st.subheader("Active Users List")
         users_list = [{"Username": u, "Pass": d["password"], "Exp": d["expiry"], "Limit": d["daily_limit"], "Delete": False} 
@@ -151,9 +155,8 @@ if role == "owner":
                 time.sleep(1)
                 st.rerun()
 
-    # TAB 2: MANUAL ADD + GREETING (NEW FEATURE)
     with tab2:
-        st.subheader("➕ Manually Create User (Friend/VIP)")
+        st.subheader("➕ Manual Add User")
         with st.form("manual_add"):
             c1, c2 = st.columns(2)
             mu = c1.text_input("New Username")
@@ -161,9 +164,7 @@ if role == "owner":
             c3, c4 = st.columns(2)
             ml = c3.number_input("Daily Limit", 50)
             md = c4.selectbox("Validity", [30, 90, 365], format_func=lambda x: f"{x} Days")
-            
-            # Phone Number for Greeting
-            m_phone = st.text_input("User Phone Number (for SMS/WhatsApp)", placeholder="9876543210")
+            m_phone = st.text_input("Phone (Optional)", placeholder="9876543210")
             
             if st.form_submit_button("Create User"):
                 if mu in st.session_state["user_db"]:
@@ -171,24 +172,13 @@ if role == "owner":
                 else:
                     exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
                     st.session_state["user_db"][mu] = {"password": mp, "role": "client", "expiry": exp, "daily_limit": ml}
-                    st.success(f"✅ User '{mu}' Created Successfully!")
-                    
-                    # GENERATE WHATSAPP LINK IF PHONE PROVIDED
+                    st.success(f"✅ User '{mu}' Created!")
                     if m_phone:
                         wa_link = make_login_share_link(m_phone, mu, mp)
-                        st.markdown(f"""
-                        <a href="{wa_link}" target="_blank">
-                            <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; border-radius:5px; font-size:16px; cursor:pointer;">
-                                📲 Send Details via WhatsApp
-                            </button>
-                        </a>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.warning("Phone number not provided. Cannot send greeting msg.")
+                        st.markdown(f'<a href="{wa_link}" target="_blank"><button>📲 Send WhatsApp</button></a>', unsafe_allow_html=True)
 
-    # TAB 3: COUPONS
     with tab3:
-        st.subheader("🎟️ Generate Codes (For Payment/Unknowns)")
+        st.subheader("🎟️ Generate Codes")
         c1, c2 = st.columns(2)
         days = c1.selectbox("Validity", [7, 15, 30], key="g_days")
         limit = c2.number_input("Limit", 50, key="g_limit")
@@ -196,9 +186,10 @@ if role == "owner":
             code = generate_coupon(days, limit)
             st.success(f"Code: {code}")
             st.code(code)
-        if st.session_state["redeem_codes"]: st.json(st.session_state["redeem_codes"])
+        
+        st.write("### Active Coupons")
+        st.json(st.session_state["redeem_codes"])
 
-    # TAB 4: REPORTS
     with tab4:
         if st.session_state["activity_log"]:
             df = pd.DataFrame(st.session_state["activity_log"])
@@ -206,11 +197,10 @@ if role == "owner":
             st.download_button("📥 Download", df.to_csv().encode('utf-8'), "report.csv")
         else: st.info("No data.")
 
-# --- 🕵️‍♂️ SCRAPER V9 ---
-st.header("🦁 Basha Master V9: The Beast")
+# --- 🕵️‍♂️ SCRAPER V10 ---
+st.header("🦁 Basha Master V10: The Beast")
 st.markdown("---")
 
-# Expiry Check
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
 if date.today() > exp_date and role != "owner":
     st.error("⛔ PLAN EXPIRED! Recharge needed.")
@@ -266,15 +256,12 @@ if st.button("🚀 Start Vettai"):
                 time.sleep(2)
                 try: name = driver.find_element(By.XPATH, '//h1[contains(@class, "DUwDvf")]').text
                 except: name = "Unknown"
-                
                 phone = "No Number"
                 try:
                     btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
                     if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
-                
                 if phone != "No Number" and phone in st.session_state["global_leads_db"]: continue
-
                 email, website = "Skipped", "Not Found"
                 if enable_email:
                     try:
@@ -287,11 +274,9 @@ if st.button("🚀 Start Vettai"):
                                 if mails: email = list(mails)[0]
                             except: pass
                     except: pass
-                
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
                 st.session_state["global_leads_db"].add(link)
                 if phone != "No Number": st.session_state["global_leads_db"].add(phone)
-                
                 status.success(f"✅ Secured: {name} | {phone}")
                 progress.progress((i+1)/len(unique_links))
             except: continue
