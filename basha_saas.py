@@ -8,22 +8,18 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
+from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException
 
 # --- 🧠 CENTRAL MEMORY (Simulated Database) ---
-# Note: Free Cloud la restart aana idhu reset aagum. 
-# Permanent ah venum na Google Sheets connect pannanum (Next Level).
-
 if "user_db" not in st.session_state:
     st.session_state["user_db"] = {
         "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "daily_limit": 10000},
         "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "daily_limit": 5}
     }
 
-# Used Numbers (Global Blacklist)
 if "global_leads_db" not in st.session_state:
-    st.session_state["global_leads_db"] = set() # Stores phone numbers that are already taken
+    st.session_state["global_leads_db"] = set()
 
-# Activity Logs (Who did what)
 if "activity_log" not in st.session_state:
     st.session_state["activity_log"] = []
 
@@ -38,14 +34,12 @@ if "logged_in" not in st.session_state:
 def check_login(username, password):
     db = st.session_state["user_db"]
     if username in db and db[username]["password"] == password:
-        # Check Expiry
         exp_date = datetime.strptime(db[username]["expiry"], "%Y-%m-%d").date()
         if date.today() > exp_date:
             return "expired", None
         return "success", db[username]["role"]
     return "fail", None
 
-# Login UI
 if not st.session_state["logged_in"]:
     st.markdown("## 🔐 Basha Master Login")
     u = st.text_input("Username")
@@ -68,18 +62,15 @@ current_user = st.session_state["user"]
 current_role = st.session_state["role"]
 user_limit = st.session_state["user_db"][current_user]["daily_limit"]
 
-# Sidebar
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.badge(current_role.upper())
 if st.sidebar.button("Logout", type="primary"):
     st.session_state["logged_in"] = False
     st.rerun()
 
-# --- 👑 ADMIN PANEL (Only for Owner) ---
+# --- 👑 ADMIN PANEL ---
 if current_role == "owner":
     st.title("🛠️ Admin Control Center")
-    
-    # Tabs for neat look
     tab1, tab2 = st.tabs(["➕ Add User", "📊 Analytics & Logs"])
     
     with tab1:
@@ -87,7 +78,6 @@ if current_role == "owner":
             c1, c2 = st.columns(2)
             new_user = c1.text_input("New Username")
             new_pass = c2.text_input("New Password")
-            
             c3, c4 = st.columns(2)
             limit = c3.number_input("Daily Lead Limit", value=50)
             duration = c4.selectbox("Plan Duration", ["15 Days", "30 Days", "3 Months", "1 Year"])
@@ -97,38 +87,25 @@ if current_role == "owner":
                 if duration == "30 Days": days = 30
                 elif duration == "3 Months": days = 90
                 elif duration == "1 Year": days = 365
-                
                 expiry_date = (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
                 
                 st.session_state["user_db"][new_user] = {
-                    "password": new_pass,
-                    "role": "client",
-                    "expiry": expiry_date,
-                    "daily_limit": limit
+                    "password": new_pass, "role": "client", "expiry": expiry_date, "daily_limit": limit
                 }
                 st.success(f"✅ User '{new_user}' Created! Valid till {expiry_date}")
 
     with tab2:
-        # Analytics Chart
-        st.subheader("📈 Search Trends (Category wise)")
+        st.subheader("📈 Search Trends")
         if st.session_state["activity_log"]:
             df_log = pd.DataFrame(st.session_state["activity_log"])
-            
-            # Bar Chart: Which category is most searched?
-            chart_data = df_log["keyword"].value_counts()
-            st.bar_chart(chart_data)
-            
-            # Detailed Table
-            st.write("### 📋 Recent User Activity")
+            st.bar_chart(df_log["keyword"].value_counts())
             st.dataframe(df_log, use_container_width=True)
         else:
             st.info("No activity yet.")
-            
-        st.write(f"🔥 **Total Global Leads Collected (Unique):** {len(st.session_state['global_leads_db'])}")
-
+        st.write(f"🔥 **Total Unique Leads:** {len(st.session_state['global_leads_db'])}")
     st.markdown("---")
 
-# --- 🕵️‍♂️ SCRAPING INTERFACE ---
+# --- 🕵️‍♂️ SCRAPING LOGIC (Fixed for Errors) ---
 st.header("🤖 Basha Master: Smart Hunter (No Duplicates)")
 c1, c2 = st.columns([2,1])
 keyword = c1.text_input("Enter Business & City", "Gyms in Chennai")
@@ -158,32 +135,48 @@ if st.button("🚀 Start Vettai"):
         collected_data = []
         new_leads_count = 0
         
-        panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
+        # Locate the scrollable panel
+        try:
+            panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
+        except:
+            status.error("❌ Could not find results. Check internet or keyword.")
+            driver.quit()
+            st.stop()
         
         scroll_attempts = 0
-        while new_leads_count < count and scroll_attempts < 20:
+        
+        while new_leads_count < count and scroll_attempts < 30:
+            # Scroll Down
             driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", panel)
             time.sleep(2)
+            
+            # Re-fetch elements every loop to avoid "Stale Element" error
             listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
             
             for listing in listings:
                 if new_leads_count >= count: break
                 
                 try:
-                    # Smart logic to avoid clicking duplicates
+                    # --- SAFE EXTRACTION START ---
                     link = listing.get_attribute("href")
                     
-                    # Check 1: Link already taken?
+                    # Global Duplicate Check
                     if link in st.session_state["global_leads_db"]:
                         continue 
 
+                    # Scroll to element to make it clickable
                     driver.execute_script("arguments[0].scrollIntoView();", listing)
                     listing.click()
-                    time.sleep(2.5)
+                    time.sleep(2) # Give time for side panel to load
                     
-                    name = listing.get_attribute("aria-label")
-                    
-                    # Get Phone
+                    # Re-fetch name from side panel (More stable)
+                    try:
+                        name_elem = driver.find_element(By.XPATH, '//h1[contains(@class, "DUwDvf")]')
+                        name = name_elem.text
+                    except:
+                        name = listing.get_attribute("aria-label")
+
+                    # Get Phone Number
                     phone = "No Number"
                     try:
                         p_btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
@@ -191,29 +184,35 @@ if st.button("🚀 Start Vettai"):
                             phone = p_btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                     except: pass
                     
-                    # Check 2: Phone Number already taken? (VERY IMPORTANT)
+                    # Phone Duplicate Check
                     if phone != "No Number" and phone in st.session_state["global_leads_db"]:
-                        status.warning(f"⚠️ Skipping {name} ({phone}) - Already taken by someone!")
+                        status.warning(f"⚠️ Taken: {name} - Skipping...")
                         continue
                     
-                    # If Unique, Save it!
+                    # Save Data
                     if name:
                         collected_data.append({"Name": name, "Phone": phone, "Link": link})
                         
-                        # Mark as Taken in Global DB
                         st.session_state["global_leads_db"].add(link)
                         if phone != "No Number":
                             st.session_state["global_leads_db"].add(phone)
                             
                         new_leads_count += 1
                         status.success(f"✅ Secured: {name} | 📞 {phone}")
-                        
-                except: pass
+                    
+                    # --- SAFE EXTRACTION END ---
+
+                except StaleElementReferenceException:
+                    # If element changes, just skip and continue to next
+                    continue
+                except Exception as e:
+                    # Ignore other minor errors
+                    continue
+            
             scroll_attempts += 1
             
-        # --- LOGGING THE ACTIVITY ---
+        # Finish
         if collected_data:
-            # Record in Admin Log
             log_entry = {
                 "User": current_user,
                 "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -222,13 +221,13 @@ if st.button("🚀 Start Vettai"):
             }
             st.session_state["activity_log"].append(log_entry)
             
-            st.success(f"🎉 Mission Success! {len(collected_data)} Unique Leads Found.")
+            st.success(f"🎉 Success! {len(collected_data)} Unique Leads Found.")
             csv = pd.DataFrame(collected_data).to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Unique CSV", csv, "basha_unique_leads.csv", "text/csv")
+            st.download_button("📥 Download CSV", csv, "basha_leads.csv", "text/csv")
         else:
-            st.error("❌ No New Unique Leads found! All leads in this area might be taken.")
+            st.error("❌ No New Unique Leads found! (Or Check Connection)")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"System Error: {e}")
     finally:
         driver.quit()
