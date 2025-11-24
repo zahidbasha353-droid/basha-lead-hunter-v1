@@ -19,14 +19,13 @@ from bs4 import BeautifulSoup
 
 # --- 📂 PERMANENT FILE STORAGE ---
 DB_FILE = "basha_database.json"
-LEAD_COST = 2  # 1 Lead = ₹2
+LEAD_COST = 2
 
 def load_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r") as f:
                 data = json.load(f)
-                # --- AUTO-REPAIR DATABASE (CRITICAL FIX) ---
                 changes_made = False
                 today_str = str(date.today())
                 
@@ -64,7 +63,7 @@ if "last_scraped_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V27", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V28", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def image_to_base64(uploaded_file):
@@ -121,7 +120,7 @@ display_balance = f"{user_data.get('credits', 0)}"
 if role == "owner": display_balance = "∞"
 
 col_head1, col_head2 = st.columns([4, 1])
-with col_head1: st.title("🦁 Basha Master V27")
+with col_head1: st.title("🦁 Basha Master V28")
 with col_head2: st.metric(label="🌟 Credits", value=display_balance)
 
 st.sidebar.title(f"👤 {current_user.capitalize()}")
@@ -137,7 +136,7 @@ if role != "owner":
     st.sidebar.progress(min(today_used / daily_cap, 1.0))
     st.sidebar.markdown("---")
 
-# --- 💎 RECHARGE (CLIENT ONLY) ---
+# --- RECHARGE & LOGOUT ---
 if role == "client":
     with st.sidebar.expander("💎 Recharge Wallet", expanded=True):
         st.write("Scan to Pay:")
@@ -167,17 +166,26 @@ if role == "owner":
     with tab1:
         st.subheader("🔔 Pending Requests")
         pending = [r for r in db["payment_requests"] if r["status"] == "Pending"]
+        
         if pending:
             for i, req in enumerate(pending):
                 with st.container(border=True):
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
                     c1.write(f"👤 **{req['user']}**"); c2.write(f"💰 ₹{req['amount']}"); c3.write(f"🆔 `{req['utr']}`")
+                    
+                    # APPROVE BUTTON LOGIC (Fixed indentation issue)
                     if c4.button("✅", key=f"app_{i}"):
-                        fresh = load_data(); fresh["users"][req['user']]["credits"] += req['amount']
-                        for item in fresh["payment_requests"]: if item["utr"] == req["utr"]: item["status"] = "Approved"
+                        fresh = load_data()
+                        fresh["users"][req['user']]["credits"] += req['amount']
+                        for item in fresh["payment_requests"]: 
+                            if item["utr"] == req["utr"]: 
+                                item["status"] = "Approved"
                         save_data(fresh); st.success("Approved!"); st.rerun()
+                    
+                    # DECLINE BUTTON LOGIC
                     if c5.button("❌", key=f"dec_{i}"):
-                        fresh = load_data(); fresh["payment_requests"] = [r for r in fresh["payment_requests"] if r["utr"] != req["utr"]]
+                        fresh = load_data()
+                        fresh["payment_requests"] = [r for r in fresh["payment_requests"] if r["utr"] != req["utr"]]
                         save_data(fresh); st.warning("Declined"); st.rerun()
         else: st.info("No pending requests.")
 
@@ -195,7 +203,7 @@ if role == "owner":
         st.error("⚠️ **Danger Zone (For Testing Only)**")
         if st.button("🗑️ Reset All Lead History (Clear Duplicates)"):
             fresh = load_data()
-            fresh["leads"] = [] # Clear used leads
+            fresh["leads"] = [] 
             save_data(fresh)
             st.success("History Cleared! You can search 'Gyms' again.")
 
@@ -213,16 +221,13 @@ if role == "owner":
                     exp = (date.today() + timedelta(days=md)).strftime("%Y-%m-%d")
                     fresh["users"][mu] = {"password": mp, "role": "client", "expiry": exp, "credits": ml, "daily_cap": dlim, "today_usage": 0, "last_active_date": str(date.today())}
                     save_data(fresh); st.success("Created!");
-                    if mph: wa = make_login_share_link(mph, mu, mp); st.markdown(f'<a href="{wa}" target="_blank"><button>📲 WhatsApp</button></a>', unsafe_allow_html=True)
+                    if mph: wa = make_login_share_link(mph, mu, mp); st.markdown(f'<a href="{wa}" target="_blank"><button>📲 Send WhatsApp</button></a>', unsafe_allow_html=True)
 
     # TAB 4: MANAGE USERS
     with tab4:
         st.subheader("👥 Active Users List")
         fresh = load_data()
-        users_list = [
-            {"User": u, "Password": d["password"], "Balance": f"₹{d.get('credits',0)}", "Limit": d.get('daily_cap', 300), "Role": d["role"], "Delete": False} 
-            for u, d in fresh["users"].items()
-        ]
+        users_list = [{"User": u, "Password": d["password"], "Balance": f"₹{d.get('credits',0)}", "Limit": d.get('daily_cap', 300), "Role": d["role"], "Delete": False} for u, d in fresh["users"].items()]
         edited_df = st.data_editor(pd.DataFrame(users_list), column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False), "Password": st.column_config.TextColumn("Password")}, disabled=["User", "Role", "Balance"], hide_index=True)
         if st.button("🗑️ Delete Selected"):
             to_delete = edited_df[edited_df["Delete"] == True]["User"].tolist()
@@ -237,20 +242,15 @@ if role == "owner":
         if db["logs"]: 
             df_log = pd.DataFrame(db["logs"])
             st.dataframe(df_log, use_container_width=True)
-            
             c1, c2 = st.columns([1, 1])
             csv_report = df_log.to_csv(index=False).encode('utf-8')
             c1.download_button("📥 Download Report (Excel)", csv_report, "basha_report.csv", "text/csv", use_container_width=True)
-
             if c2.button("🗑️ Clear All Reports", use_container_width=True):
                 db["logs"] = []
-                save_data(db)
-                st.success("Reports Cleared!")
-                time.sleep(1)
-                st.rerun()
-        else: st.info("No activity data found.")
+                save_data(db); st.success("Reports Cleared!"); st.rerun()
 
-# --- 🕵️‍♂️ SCRAPER V27 (FINAL LOGIC) ---
+
+# --- 🕵️‍♂️ SCRAPER V28 (FINAL LOGIC) ---
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
@@ -339,7 +339,7 @@ if st.button("🚀 Start Vettai"):
                     if phone != "No Number" and phone in fresh["leads"]: continue
                     
                     email, website = "Skipped", "Not Found"
-                    # Email Logic here (omitted)
+                    # Email Logic (omitted)
                     
                     collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
                     
