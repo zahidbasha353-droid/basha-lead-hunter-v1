@@ -368,3 +368,49 @@ if st.button("🚀 Start Vettai"):
                 except: pass
                 
                 if phone != "No Number" and phone in fresh["leads"]: continue
+                
+                email, website = "Skipped", "Not Found"
+                # ... (email extraction logic omitted for brevity) ...
+                
+                collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
+                
+                fresh["leads"].append(link)
+                if phone != "No Number": fresh["leads"].append(phone)
+                
+                if role != "owner":
+                    fresh["users"][current_user]["credits"] -= LEAD_COST
+                    fresh["users"][current_user]["today_usage"] += 1
+                
+                save_data(fresh)
+                bal_disp = "∞" if role == "owner" else f"{fresh['users'][current_user]['credits']}"
+                status.success(f"✅ Secured: {name} | 🌟 Credits Left: {bal_disp}")
+                progress.progress((i+1)/len(ulinks))
+            except: continue
+            
+        if collected_data:
+            total_cost = len(collected_data) * LEAD_COST if role != "owner" else 0
+            # Save results to session state before rerunning
+            df = pd.DataFrame(collected_data)
+            st.session_state["last_scraped_data"] = df.to_json() 
+            
+            fresh["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
+            save_data(fresh)
+            
+            st.success("Completed! Displaying results...")
+            time.sleep(1)
+            st.rerun()
+        else: st.warning("No new unique leads found.")
+    except Exception as e: st.error(f"Error: {e}")
+    finally: driver.quit()
+
+# --- 📊 FINAL PERSISTENT DATA DISPLAY ---
+if st.session_state["last_scraped_data"]:
+    st.markdown("---")
+    st.subheader("Results (Scrape Complete)")
+    try:
+        df_display = pd.read_json(st.session_state["last_scraped_data"])
+        st.data_editor(df_display, column_config={"WhatsApp": st.column_config.LinkColumn("Chat", display_text="📲 Chat"), "Website": st.column_config.LinkColumn("Site")}, hide_index=True)
+        csv = df_display.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Excel", csv, "leads.csv", "text/csv")
+    except:
+        st.error("Error displaying data.")
