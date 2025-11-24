@@ -26,11 +26,51 @@ def load_data():
         try:
             with open(DB_FILE, "r") as f:
                 data = json.load(f)
-                if "payment_requests" not in data: data["payment_requests"] = []
-                if "settings" not in data: data["settings"] = {"upi_id": "basha@upi", "qr_image": None}
+                
+                # --- 🛡️ AUTO-REPAIR DATABASE (CRITICAL FIX) ---
+                changes_made = False
+                
+                # 1. Fix Settings
+                if "payment_requests" not in data: 
+                    data["payment_requests"] = []
+                    changes_made = True
+                if "settings" not in data: 
+                    data["settings"] = {"upi_id": "basha@upi", "qr_image": None}
+                    changes_made = True
+                if "leads" not in data:
+                    data["leads"] = []
+                    changes_made = True
+
+                # 2. Fix Users (Add missing keys)
+                today_str = str(date.today())
+                for u in data["users"]:
+                    user_obj = data["users"][u]
+                    
+                    if "credits" not in user_obj: 
+                        user_obj["credits"] = 0
+                        changes_made = True
+                        
+                    if "daily_cap" not in user_obj: 
+                        user_obj["daily_cap"] = 300 # Default Limit
+                        changes_made = True
+                        
+                    if "today_usage" not in user_obj: 
+                        user_obj["today_usage"] = 0
+                        changes_made = True
+                        
+                    if "last_active_date" not in user_obj: 
+                        user_obj["last_active_date"] = today_str
+                        changes_made = True
+
+                # Save if repaired
+                if changes_made:
+                    with open(DB_FILE, "w") as f:
+                        json.dump(data, f, indent=4)
+                        
                 return data
         except: pass
     
+    # Default New DB
     return {
         "users": {
             "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "credits": 50000, "daily_cap": 10000, "today_usage": 0, "last_active_date": str(date.today())},
@@ -52,7 +92,7 @@ if "db_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V19", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V20", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
 def image_to_base64(uploaded_file):
@@ -106,7 +146,7 @@ if current_user not in db["users"]:
 
 user_data = db["users"][current_user]
 
-# Daily Reset
+# Daily Reset Logic
 today_str = str(date.today())
 if user_data.get("last_active_date") != today_str:
     db["users"][current_user]["today_usage"] = 0
@@ -121,7 +161,7 @@ if role == "owner":
 
 col_head1, col_head2 = st.columns([4, 1])
 with col_head1:
-    st.title("🦁 Basha Master V19")
+    st.title("🦁 Basha Master V20")
 with col_head2:
     st.metric(label="💰 Wallet Balance", value=display_balance)
 
@@ -180,11 +220,9 @@ if role == "owner":
                     c2.write(f"💰 ₹{req['amount']}")
                     c3.write(f"🆔 `{req['utr']}`")
                     
-                    # APPROVE BUTTON
-                    if c4.button("✅", key=f"app_{i}", help="Approve Payment"):
+                    if c4.button("✅", key=f"app_{i}"):
                         fresh = load_data()
                         fresh["users"][req['user']]["credits"] += req['amount']
-                        # Mark Approved
                         for item in fresh["payment_requests"]:
                             if item["utr"] == req["utr"]: item["status"] = "Approved"
                         save_data(fresh)
@@ -192,13 +230,11 @@ if role == "owner":
                         time.sleep(1)
                         st.rerun()
                     
-                    # DECLINE BUTTON
-                    if c5.button("❌", key=f"dec_{i}", help="Decline Payment"):
+                    if c5.button("❌", key=f"dec_{i}"):
                         fresh = load_data()
-                        # Remove from list (Decline)
                         fresh["payment_requests"] = [r for r in fresh["payment_requests"] if r["utr"] != req["utr"]]
                         save_data(fresh)
-                        st.warning(f"Declined request from {req['user']}")
+                        st.warning("Declined")
                         time.sleep(1)
                         st.rerun()
         else: st.info("No pending requests.")
@@ -243,34 +279,19 @@ if role == "owner":
         st.subheader("👥 Active Users List")
         fresh = load_data()
         users_list = [
-            {
-                "User": u, 
-                "Password": d["password"], 
-                "Balance": f"₹{d.get('credits',0)}", 
-                "Daily Limit": d.get('daily_cap', 300),
-                "Role": d["role"],
-                "Delete": False
-            } 
+            {"User": u, "Password": d["password"], "Balance": f"₹{d.get('credits',0)}", "Daily Limit": d.get('daily_cap', 300), "Role": d["role"], "Delete": False} 
             for u, d in fresh["users"].items()
         ]
-        
         edited_df = st.data_editor(
             pd.DataFrame(users_list), 
-            column_config={
-                "Delete": st.column_config.CheckboxColumn("Remove?", default=False),
-                "Password": st.column_config.TextColumn("Password")
-            }, 
-            disabled=["User", "Role", "Balance"], 
-            hide_index=True
+            column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False), "Password": st.column_config.TextColumn("Password")}, 
+            disabled=["User", "Role", "Balance"], hide_index=True
         )
-        
-        if st.button("🗑️ Delete Selected Users"):
+        if st.button("🗑️ Delete Selected"):
             to_delete = edited_df[edited_df["Delete"] == True]["User"].tolist()
-            if "basha" in to_delete:
-                st.error("❌ You cannot delete the Owner (Basha)!")
+            if "basha" in to_delete: st.error("❌ Can't delete Owner!")
             elif to_delete:
-                for u in to_delete:
-                    del fresh["users"][u]
+                for u in to_delete: del fresh["users"][u]
                 save_data(fresh)
                 st.success(f"✅ Deleted: {to_delete}")
                 time.sleep(1)
@@ -279,7 +300,7 @@ if role == "owner":
     with tab5:
         if db["logs"]: st.dataframe(pd.DataFrame(db["logs"]))
 
-# --- 🕵️‍♂️ SCRAPER V19 (SAFE & VERIFIED) ---
+# --- 🕵️‍♂️ SCRAPER V20 (SAFE & VERIFIED) ---
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
@@ -287,6 +308,7 @@ if date.today() > exp_date and role != "owner":
     st.error("⛔ PLAN EXPIRED!")
     st.stop()
 
+# Logic: Clients Check
 if role != "owner":
     remaining_daily = user_data.get('daily_cap', 300) - user_data.get('today_usage', 0)
     if remaining_daily <= 0: st.error("⛔ Daily Limit Reached!"); st.stop()
@@ -313,7 +335,7 @@ if role != "owner":
 
 if st.button("🚀 Start Vettai"):
     fresh = load_data()
-    # Verify Global Lead DB integrity before starting
+    # DB Recheck for Safety
     if "leads" not in fresh: fresh["leads"] = []
     
     if role != "owner":
@@ -349,7 +371,6 @@ if st.button("🚀 Start Vettai"):
                     try: rating = float(re.search(r"(\d\.\d)", elem.find_element(By.XPATH, "./..").text).group(1))
                     except: pass
                     l = elem.get_attribute("href")
-                    # 🛡️ CRITICAL: Check if Lead exists in Global DB
                     if rating >= min_rating and l not in db["leads"]: links.add(l)
                 except: pass
             scrolls += 1
@@ -359,7 +380,6 @@ if st.button("🚀 Start Vettai"):
         progress = st.progress(0)
         
         for i, link in enumerate(ulinks):
-            # 🛡️ CRITICAL: Reload DB to check if another user took this lead just now
             fresh = load_data()
             if role != "owner":
                 if fresh["users"][current_user]["credits"] < LEAD_COST: status.error("Balance Over!"); break
@@ -375,9 +395,6 @@ if st.button("🚀 Start Vettai"):
                     btns = driver.find_elements(By.XPATH, '//button[contains(@data-item-id, "phone")]')
                     if btns: phone = btns[0].get_attribute("aria-label").replace("Phone: ", "").strip()
                 except: pass
-                
-                # 🛡️ CRITICAL: Double check Global DB for Phone & Link
-                if link in fresh["leads"]: continue
                 if phone != "No Number" and phone in fresh["leads"]: continue
                 
                 email, website = "Skipped", "Not Found"
@@ -394,8 +411,6 @@ if st.button("🚀 Start Vettai"):
                     except: pass
                 
                 collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
-                
-                # 🛡️ LOCK THE LEAD IMMEDIATELY
                 fresh["leads"].append(link)
                 if phone != "No Number": fresh["leads"].append(phone)
                 
@@ -404,7 +419,6 @@ if st.button("🚀 Start Vettai"):
                     fresh["users"][current_user]["today_usage"] += 1
                 
                 save_data(fresh)
-                
                 bal_disp = "∞" if role == "owner" else f"₹{fresh['users'][current_user]['credits']}"
                 status.success(f"✅ Secured: {name} | 💰 Bal: {bal_disp}")
                 progress.progress((i+1)/len(ulinks))
