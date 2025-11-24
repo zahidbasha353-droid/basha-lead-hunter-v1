@@ -19,33 +19,42 @@ from bs4 import BeautifulSoup
 
 # --- 📂 PERMANENT FILE STORAGE ---
 DB_FILE = "basha_database.json"
-LEAD_COST = 2 # Cost per lead in Credits
-
-def generate_coupon_code(length=8):
-    """Generates a unique alphanumeric coupon code."""
-    characters = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(characters) for i in range(length))
+LEAD_COST = 2 
 
 def load_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r") as f:
                 data = json.load(f)
-                # Ensure Coupons key exists for V23 logic
-                if "coupons" not in data: data["coupons"] = {};
-                # Auto-repair logic from V22 remains here for robustness...
+                # --- AUTO-REPAIR DATABASE (CRITICAL FIX) ---
+                changes_made = False
+                today_str = str(date.today())
+                
+                # Ensure all users have tracking keys
+                for u in data["users"]:
+                    user_obj = data["users"][u]
+                    if "credits" not in user_obj: user_obj["credits"] = 0; changes_made = True
+                    if "daily_cap" not in user_obj: user_obj["daily_cap"] = 300; changes_made = True
+                    if "today_usage" not in user_obj: user_obj["today_usage"] = 0; changes_made = True
+                    if "last_active_date" not in user_obj: user_obj["last_active_date"] = today_str; changes_made = True
+
+                if changes_made:
+                    with open(DB_FILE, "w") as f: json.dump(data, f, indent=4)
+                        
                 return data
         except: pass
     
-    # New clean database structure for V23 (Redeem System)
+    # Default New DB
     return {
         "users": {
             "basha": {"password": "king", "role": "owner", "expiry": "2030-01-01", "credits": 50000, "daily_cap": 10000, "today_usage": 0, "last_active_date": str(date.today())},
             "client1": {"password": "guest", "role": "client", "expiry": "2025-12-30", "credits": 50, "daily_cap": 300, "today_usage": 0, "last_active_date": str(date.today())}
         },
-        "coupons": {}, # Coupon code: {"credits": 100, "used": False, "used_by": None, "used_on": None}
+        "coupons": {},
         "leads": [],
         "logs": [],
+        "payment_requests": [],
+        "settings": {"upi_id": "yourname@upi", "qr_image": None}
     }
 
 def save_data(data):
@@ -61,12 +70,12 @@ if "last_scraped_data" not in st.session_state:
 
 db = st.session_state["db_data"]
 
-st.set_page_config(page_title="Basha Master V23 (Redeem)", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Basha Master V24", page_icon="🦁", layout="wide")
 
 # --- 🛠️ HELPER FUNCTIONS ---
-def image_to_base64(uploaded_file):
-    try: return base64.b64encode(uploaded_file.getvalue()).decode()
-    except: return None
+def generate_coupon_code(length=8):
+    characters = string.ascii_uppercase + string.digits
+    return ''.join(random.choice(characters) for i in range(length))
 
 def make_whatsapp_link(phone):
     if not phone or phone == "No Number": return None
@@ -120,13 +129,13 @@ if user_data.get("last_active_date") != today_str:
     save_data(db)
     user_data = db["users"][current_user]
 
-# --- 👑 OWNER UNLIMITED LOGIC & METRIC UPDATE ---
+# --- OWNER UNLIMITED LOGIC & METRIC UPDATE ---
 display_balance = f"{user_data.get('credits', 0)}"
 if role == "owner": display_balance = "∞"
 
 col_head1, col_head2 = st.columns([4, 1])
-with col_head1: st.title("🦁 Basha Master V23 (Redeem System)")
-with col_head2: st.metric(label="🌟 Credits", value=display_balance) # Changed label to Credits
+with col_head1: st.title("🦁 Basha Master V24")
+with col_head2: st.metric(label="🌟 Credits", value=display_balance)
 
 st.sidebar.title(f"👤 {current_user.capitalize()}")
 st.sidebar.caption(f"📅 Plan Exp: {user_data['expiry']}")
@@ -149,7 +158,7 @@ if role == "client":
             fresh = load_data()
             if redeem_code in fresh["coupons"]:
                 coupon = fresh["coupons"][redeem_code]
-                if coupon["used"]:
+                if coupon.get("used", False): # Check if 'used' key exists and is True
                     st.error("❌ Code already used!")
                 else:
                     credits_to_add = coupon["credits"]
@@ -191,24 +200,27 @@ if role == "owner":
 
         st.markdown("---")
         st.subheader("📋 View All Coupons")
-        coupon_list = [{"Code": k, "Credits": v["credits"], "Used": v["used"], "Used By": v["used_by"], "Used On": v["used_on"]} for k, v in db["coupons"].items()]
+        
+        # --- FIX APPLIED HERE: Safely accessing keys with .get() ---
+        coupon_list = [{
+            "Code": k, 
+            "Credits": v.get("credits", 0), 
+            "Used": v.get("used", False), 
+            "Used By": v.get("used_by", "N/A"), 
+            "Used On": v.get("used_on", "N/A")
+        } for k, v in db["coupons"].items()]
         st.dataframe(pd.DataFrame(coupon_list))
 
 
     with tab2: # Manage Users
         st.subheader("👥 Users")
         fresh = load_data()
-        # Removed Balance from 'disabled' list to allow admin to manually edit it
         users_list = [{"User": u, "Pass": d["password"], "Credits": d.get('credits',0), "Limit": d.get('daily_cap', 300), "Role": d["role"], "Delete": False} for u, d in fresh["users"].items()]
         
         edited_df = st.data_editor(
             pd.DataFrame(users_list), 
-            column_config={
-                "Delete": st.column_config.CheckboxColumn("Remove?", default=False), 
-                "Credits": st.column_config.NumberColumn("Credits", format="%d") # Allow editing credits
-            }, 
-            disabled=["User", "Role"], 
-            hide_index=True
+            column_config={"Delete": st.column_config.CheckboxColumn("Remove?", default=False), "Credits": st.column_config.NumberColumn("Credits", format="%d")}, 
+            disabled=["User", "Role"], hide_index=True
         )
 
         if st.button("💾 Update Users / Delete Selected"):
@@ -218,7 +230,6 @@ if role == "owner":
                     if user_key != "basha": del fresh["users"][user_key]
                     else: st.error("Can't delete Owner!")
                 else:
-                    # Update credits and limit
                     fresh["users"][user_key]["credits"] = row['Credits']
                     fresh["users"][user_key]["daily_cap"] = row['Limit']
             
@@ -233,7 +244,7 @@ if role == "owner":
 
     with tab4: # Settings
         st.subheader("⚙️ General Settings")
-        # --- ADD USER Logic moved here to clean up tab arrangement ---
+        # --- ADD USER Logic ---
         with st.expander("➕ Add New User"):
             with st.form("add"):
                 c1, c2 = st.columns(2)
@@ -267,19 +278,17 @@ if role == "owner":
             st.success("History Cleared! You can search 'Gyms' again.")
 
 
-# --- 🕵️‍♂️ SCRAPER V23 (CREDIT SYSTEM) ---
+# --- 🕵️‍♂️ SCRAPER V24 ---
 st.markdown("---")
 
 exp_date = datetime.strptime(user_data["expiry"], "%Y-%m-%d").date()
-if date.today() > exp_date and role != "owner":
-    st.error("⛔ PLAN EXPIRED!")
-    st.stop()
+if date.today() > exp_date and role != "owner": st.error("⛔ PLAN EXPIRED!"); st.stop()
 
 # Credit and Limit Checks
 if role != "owner":
     remaining_daily = user_data.get('daily_cap', 300) - user_data.get('today_usage', 0)
     if remaining_daily <= 0: st.error("⛔ Daily Limit Reached!"); st.stop()
-    if user_data.get('credits', 0) < LEAD_COST: st.error(f"⛔ Low Credits! Min: {LEAD_COST}"); st.stop() # Updated message
+    if user_data.get('credits', 0) < LEAD_COST: st.error(f"⛔ Low Credits! Min: {LEAD_COST}"); st.stop()
 else: remaining_daily = 999999
 
 c1, c2, c3 = st.columns([2, 1, 1])
@@ -296,7 +305,7 @@ min_rating = c3.slider("⭐ Min Rating", 0.0, 5.0, 3.5, 0.5)
 enable_email = st.checkbox("📧 Enable Email Extraction")
 
 if role != "owner":
-    st.info(f"✨ **Cost:** {estimated_cost} Credits | 📊 **Limit Left:** {remaining_daily}") # Updated message
+    st.info(f"✨ **Cost:** {estimated_cost} Credits | 📊 **Limit Left:** {remaining_daily}")
 
 if st.button("🚀 Start Vettai"):
     fresh = load_data()
@@ -321,7 +330,6 @@ if st.button("🚀 Start Vettai"):
         
         links = set()
         scrolls = 0
-        # ... (Scraping logic remains the same) ...
         panel = driver.find_element(By.XPATH, '//div[contains(@aria-label, "Results for")]')
         while len(links) < leads_requested and scrolls < 20:
             driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", panel)
@@ -337,7 +345,7 @@ if st.button("🚀 Start Vettai"):
         if not links:
             status.error("❌ No new leads found! (Maybe duplicates? Try clearing history in Admin Settings)")
             driver.quit()
-            st.session_state["last_scraped_data"] = None # Clear previous results if no new data
+            st.session_state["last_scraped_data"] = None 
             st.stop()
 
         status.info(f"✅ Found {len(links)} Targets. Extracting...")
@@ -346,7 +354,7 @@ if st.button("🚀 Start Vettai"):
         
         for i, link in enumerate(ulinks):
             fresh = load_data()
-            if role != "owner" and fresh["users"][current_user]["credits"] < LEAD_COST: status.error("Credits Over!"); break # Updated message
+            if role != "owner" and fresh["users"][current_user]["credits"] < LEAD_COST: status.error("Credits Over!"); break 
 
             try:
                 driver.get(link)
@@ -360,39 +368,3 @@ if st.button("🚀 Start Vettai"):
                 except: pass
                 
                 if phone != "No Number" and phone in fresh["leads"]: continue
-                
-                email, website = "Skipped", "Not Found"
-                # ... (email extraction logic omitted for brevity) ...
-                
-                collected_data.append({"Name": name, "Phone": phone, "Rating": "4.0+", "Email": email, "Website": website, "WhatsApp": make_whatsapp_link(phone)})
-                
-                fresh["leads"].append(link)
-                if phone != "No Number": fresh["leads"].append(phone)
-                
-                if role != "owner":
-                    fresh["users"][current_user]["credits"] -= LEAD_COST
-                    fresh["users"][current_user]["today_usage"] += 1
-                
-                save_data(fresh)
-                bal_disp = "∞" if role == "owner" else f"{fresh['users'][current_user]['credits']}"
-                status.success(f"✅ Secured: {name} | 🌟 Credits Left: {bal_disp}") # Updated message
-                progress.progress((i+1)/len(ulinks))
-            except: continue
-            
-        if collected_data:
-            total_cost = len(collected_data) * LEAD_COST if role != "owner" else 0
-            # Save results to session state before rerunning
-            df = pd.DataFrame(collected_data)
-            st.session_state["last_scraped_data"] = df.to_json() 
-            
-            fresh["logs"].append({"User": current_user, "Keyword": keyword, "Count": len(collected_data), "Cost": total_cost, "Time": str(datetime.now())})
-            save_data(fresh)
-            
-            st.success("Completed! Displaying results...")
-            time.sleep(1)
-            st.rerun() # This triggers the app to render the data persistently
-        else: st.warning("No new unique leads found.")
-    except Exception as e: st.error(f"Error: {e}")
-    finally: driver.quit()
-
-# --- 📊 FINAL PERSISTENT DATA DISPLAY ---
